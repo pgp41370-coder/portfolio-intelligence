@@ -11,7 +11,13 @@
   --color-brand: #0b2a4a;
   --color-brand-hover: #123b66;
   --color-accent: #0f766e;
+  --color-accent-soft: #e7f4f2;
   --color-caution: #b45309;
+  --color-caution-soft: #fff7e8;
+  --color-negative: #b42318;
+  --color-negative-soft: #fef3f2;
+  --color-positive: #067647;
+  --color-positive-soft: #ecfdf3;
 }
 
 @theme inline {

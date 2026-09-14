@@ -1,12 +1,12 @@
 """Version 1 of the public API.
 
-Future finance modules (portfolios, analytics) get their own router module and
-are mounted here, e.g. `api_router.include_router(portfolios.router, prefix="/portfolios")`.
+Each finance module gets its own router module and is mounted here.
 """
 
 from fastapi import APIRouter
 
 from app.api.deps import SettingsDep
+from app.api.v1 import portfolios
 from app.schemas.system import ApiInfoResponse
 
 api_router = APIRouter(prefix="/api/v1")
@@ -20,3 +20,6 @@ def api_info(settings: SettingsDep) -> ApiInfoResponse:
         status="running",
         message=f"{settings.app_name} is running",
     )
+
+
+api_router.include_router(portfolios.router)

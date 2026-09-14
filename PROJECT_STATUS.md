@@ -14,24 +14,41 @@ Git                ✅
 GitHub             ✅
 Vercel             ✅
 Live URL           https://portfolio-intelligence-bice.vercel.app
-
-NEXT MILESTONE:
-Portfolio Input + Data Model
 ```
 
-## Details
+```
+MILESTONE 2: PORTFOLIO INPUT + DATA MODEL
 
-| Item | Value |
+Portfolio data model       ✅
+Database migration         ✅
+Portfolio API              ✅
+Manual entry               ✅
+CSV upload                 ✅
+Validation                 ✅
+Portfolio display          ✅
+Tests                      ✅
+Security review            ✅
+Production build           ✅
+
+NEXT MILESTONE:
+Market Data (not started)
+```
+
+## Milestone 2 details
+
+| Item | Result |
 |---|---|
 | Completed | 15 September 2026 |
-| Repository | https://github.com/pgp41370-coder/portfolio-intelligence (public) |
-| Hosting | Vercel Hobby (free) |
-| Backend tests | 13 passed (Pytest), including a real PostgreSQL connectivity test |
-| Frontend checks | ESLint clean; Next.js production build succeeds locally and on Vercel |
+| Data model | `portfolios` → `holdings` (UUID keys, cascade foreign key, unique symbol per exchange per portfolio, check constraints for quantity, price, exchange and symbol format) |
+| Migration | Alembic revision `20260915_0001`; rebuilds from scratch in tests; `alembic check` reports no drift from the models |
+| API | Create, list and retrieve portfolios; add and delete holdings; CSV preview and CSV import |
+| Backend tests | 149 passed with PostgreSQL (98 run and 51 skip without `TEST_DATABASE_URL`) |
+| Frontend checks | ESLint clean; production build succeeds |
+| Manual testing | Manual entry, validation errors, add/remove holdings, review, save, CSV errors, CSV import, portfolio display and holding deletion verified in the browser against local PostgreSQL; no horizontal overflow at 375 px |
 
-## Known limitations at this milestone
+## Known limitations
 
-- Only the frontend is deployed. The FastAPI backend runs locally.
-- The frontend does not call the backend yet.
-- No database tables exist; only a connectivity check (`GET /health/db`).
-- No portfolio analytics are implemented. All analysis areas are labelled as planned.
+- **Production has no backend or database.** The Vercel deployment shows the portfolio interface but reports that storage is unavailable. The complete flow works locally. Deploying the API and connecting Supabase PostgreSQL is a separate, planned step.
+- No user accounts: this is a demonstration MVP.
+- Symbols are validated for format only, not against NSE/BSE listings.
+- No market data; total invested capital is the only calculated value and is not a market value.

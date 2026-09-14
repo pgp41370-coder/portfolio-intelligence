@@ -4,10 +4,12 @@ version = "0.1.0"
 description = "FastAPI backend for Portfolio Intelligence, a portfolio analytics platform for Indian equities."
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "alembic>=1.20.0",
     "fastapi>=0.141.1",
     "psycopg[binary]>=3.3.5",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.15.0",
+    "python-multipart>=0.0.32",
     "sqlalchemy>=2.0.53",
     "uvicorn[standard]>=0.53.0",
 ]

@@ -1,7 +1,6 @@
-"""Database engine management and connectivity checks.
+"""Database engine and session management, plus a connectivity check.
 
-No tables are defined yet. This module turns DATABASE_URL into a SQLAlchemy
-engine and verifies that the database answers a trivial query.
+The schema itself is managed by Alembic migrations (see backend/migrations).
 """
 
 import logging
@@ -10,6 +9,7 @@ from functools import lru_cache
 
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 
@@ -38,10 +38,25 @@ def _create_engine(url: str) -> Engine:
     return create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
 
 
-def get_engine(settings: Settings) -> Engine | None:
+@lru_cache(maxsize=4)
+def _create_session_factory(url: str) -> sessionmaker[Session]:
+    return sessionmaker(bind=_create_engine(url), expire_on_commit=False)
+
+
+def _database_url(settings: Settings) -> str | None:
     if settings.database_url is None:
         return None
-    return _create_engine(normalize_database_url(settings.database_url.get_secret_value()))
+    return normalize_database_url(settings.database_url.get_secret_value())
+
+
+def get_engine(settings: Settings) -> Engine | None:
+    url = _database_url(settings)
+    return None if url is None else _create_engine(url)
+
+
+def get_session_factory(settings: Settings) -> sessionmaker[Session] | None:
+    url = _database_url(settings)
+    return None if url is None else _create_session_factory(url)
 
 
 def check_database(settings: Settings) -> DatabaseStatus:
