@@ -6,7 +6,7 @@ Portfolio Intelligence is a portfolio analytics platform for Indian equities lis
 
 > **Status: early build (Milestone 1).** The application skeleton is live. Portfolio analytics are **not implemented yet**. See [Roadmap](#roadmap).
 
-**Live site:** _added after deployment_
+**Live site:** https://portfolio-intelligence-bice.vercel.app
 
 ---
 
