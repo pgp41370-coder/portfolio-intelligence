@@ -81,7 +81,7 @@ def lookup_latest_prices(session: Session, provider: str, keys: Iterable[Securit
 
 def get_status(session: Session, settings: Settings, now: datetime) -> MarketDataStatusRead:
     provider = settings.market_data_provider
-    expected = latest_expected_session(now, frozenset(settings.nse_trading_holidays))
+    expected = latest_expected_session(now, settings.trading_calendar)
 
     counts = {PriceFreshness.FRESH: 0, PriceFreshness.STALE: 0}
     unpriced = 0

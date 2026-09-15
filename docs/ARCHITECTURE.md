@@ -117,8 +117,8 @@ erDiagram
 
 1. `sync-listings` loads the provider's security list.
 2. `sync-prices` takes a PostgreSQL advisory lock, plans requests for held NSE securities that lack the latest expected session, and checks the monthly request budget before every request.
-3. The provider adapter throttles (≥ 1.1 s), retries only timeouts and 5xx (bounded), stops on 400/401/403/429, and validates every response.
-4. Valid closes are upserted; the run and its counters are recorded.
+3. The provider adapter throttles (≥ 1.1 s), retries only timeouts and 5xx (bounded), stops on authentication failures (401/403, or a 400 reporting a key problem) and 429, and validates every response.
+4. Only completed session closes are kept: the trade date must be a session in the configured NSE calendar and not after the latest expected session. They are upserted; the run, its counters and any ignored bars are recorded.
 
 See [market-data.md](market-data.md) for methodology, freshness rules and limitations.
 
@@ -164,6 +164,7 @@ backend/
       providers/                  base protocol, Indian API adapter
       ingestion/sync.py           security-master and price sync
       calendar.py                 NSE session and freshness rules
+      nse_calendar.py             published NSE trading holidays and special sessions
       budget.py                   monthly request budget
       repository.py, service.py   database access and read-side services
       records.py, schemas.py      provider-neutral records, status response

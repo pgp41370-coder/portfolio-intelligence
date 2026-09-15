@@ -140,7 +140,8 @@ Backend (`backend/.env` or the environment):
 | `INDIAN_API_KEY` | For price sync | Indian API key. **Backend only**; never exposed to the frontend or committed. Without it the app runs and valuation uses already-stored prices. |
 | `MARKET_DATA_MONTHLY_REQUEST_BUDGET` | No | Maximum metered provider requests per IST calendar month. Default `450`, maximum `500`. |
 | `MARKET_DATA_BACKFILL_PERIOD` | No | Initial price history period: `1m`, `6m` or `1yr` (default). |
-| `NSE_TRADING_HOLIDAYS` | No | JSON list of NSE holiday dates used by the price-freshness rule, e.g. `["2026-10-02"]`. |
+| `NSE_TRADING_HOLIDAYS` | No | JSON list of NSE weekday trading holidays used by the price-freshness rule. Defaults to NSE's published 2026 list; setting it replaces the list. |
+| `NSE_SPECIAL_TRADING_SESSIONS` | No | JSON list of exchange-declared sessions on days that are normally closed. Defaults to `["2026-02-01"]` (Union Budget, Sunday). |
 | `TEST_DATABASE_URL` | For database tests | A separate database whose name must end in `_test`. The tests rebuild its schema. |
 
 Frontend:
@@ -230,9 +231,10 @@ Portfolios are valued at the **latest available dated NSE end-of-day closing pri
 | Market value | quantity × NSE end-of-day close |
 | Unrealized P&L | market value − quantity × average buy price |
 | Return | unrealized P&L ÷ invested value (portfolio: total P&L ÷ invested value of priced holdings) |
-| Weight | market value ÷ current value of priced holdings |
+| Weight | market value ÷ current value of priced holdings (displayed weights are allocated after rounding so they sum to exactly 100.00%) |
 
-- **VALUED:** priced at the close of the latest expected NSE session (after 18:00 IST on a session day, that day; otherwise the previous session).
+- **VALUED:** priced at the close of the latest expected NSE session (after 18:00 IST on a session day, that day; otherwise the previous session). Sessions follow the configured NSE calendar: weekdays, minus trading holidays, plus special sessions such as the Sunday 1 Feb 2026 Budget session.
+- **Only completed session closes are stored:** a bar for today before 18:00 IST, a future date or a non-session day is ignored by the sync.
 - **STALE:** priced at an older close; the date is always shown.
 - **UNPRICED:** no NSE listing (e.g. BSE-only), unknown symbol or no stored price. Excluded from current value, P&L, return and weights; still included in total invested. Never shown as ₹0.
 - BSE holdings of securities that also trade on NSE are valued at the NSE close, and labelled as such.
@@ -457,10 +459,10 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 ## Current limitations
 
 - **The live site has no backend or database.** Portfolio pages on Vercel explain that storage and valuation are unavailable. The complete flow works locally. Deploying the API, the database (Supabase) and a scheduled sync is a separate, planned step.
-- **No real price sync has run yet.** The Indian API adapter is built from the provider's documentation and tested with recorded-format fixtures; the first sync with a real key must confirm the response format and that recent closes are unadjusted daily prices.
+- **Real provider validated locally, on a small sample.** On 15 Sep 2026, NSE end-of-day closes for RELIANCE, TCS, INFY, HDFCBANK and M&M matched NSE's official figures to the paisa, and one year of history was daily. Whether the provider adjusts history for corporate actions could not be established.
 - **End-of-day, NSE only.** Not real-time. BSE-only securities cannot be valued. ISIN is not populated.
 - **Not adjusted for corporate actions and not a total return.** Dividends, taxes and charges are excluded; large moves are flagged but not corrected.
-- **NSE holidays** must be configured (`NSE_TRADING_HOLIDAYS`) for exact freshness around exchange holidays.
+- **The NSE trading calendar is maintained by hand.** The 2026 holidays and special session are built in (`backend/app/market_data/nse_calendar.py`); each new year's list must be added.
 - **Free-tier provider.** About 20 held NSE securities can be kept current each month within the request budget; the provider publishes no SLA.
 - **No user accounts.** Anyone who can reach a running backend can see and change every portfolio. This is a demonstration MVP, not a production financial service.
 - Holdings cannot be edited in place; remove and add again. Portfolios cannot be renamed or deleted from the interface yet.
@@ -471,7 +473,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 |---|---|---|
 | 1. Live application skeleton | Frontend, backend, database configuration, tests, deployment | Done |
 | 2. Portfolio input and data model | Manual entry, CSV import, validation, PostgreSQL storage, portfolio display | Done |
-| 3A. Market data and valuation | Security master, NSE end-of-day prices, sync with request budget, portfolio valuation API and UI | Done (local; first real price sync pending an API key) |
+| 3A. Market data and valuation | Security master, NSE end-of-day prices, sync with request budget, portfolio valuation API and UI | Done (local; validated against the real provider and NSE closes) |
 | 3B. Production backend | Deploy the API, connect Supabase PostgreSQL, scheduled price sync | Planned |
 | 4. Analytics | Allocation, concentration, risk and performance | Planned |
 

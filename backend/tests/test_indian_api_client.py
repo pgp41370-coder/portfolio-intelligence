@@ -124,28 +124,73 @@ def test_invalid_symbol_is_rejected_without_a_request() -> None:
     assert responder.requests == []
 
 
-@pytest.mark.parametrize(("status", "body"), [(400, b"Missing API key"), (401, b"Invalid API key"), (403, b"Forbidden")])
-def test_authentication_errors_are_not_retried(status: int, body: bytes) -> None:
+# Bodies as observed from the real provider on 15 Sep 2026 (no key: 400; unknown key: 401).
+@pytest.mark.parametrize(
+    ("status", "body", "wording"),
+    [
+        (400, b"Missing API key", "API key problem (HTTP 400"),
+        (401, b"Invalid API key", "authentication or authorization failed (HTTP 401"),
+        (403, b"Forbidden", "authentication or authorization failed (HTTP 403"),
+    ],
+)
+def test_authentication_errors_are_not_retried(status: int, body: bytes, wording: str) -> None:
     responder = Responder((status, body))
     provider, clock = build(responder)
 
-    with pytest.raises(ProviderAuthenticationError):
+    with pytest.raises(ProviderAuthenticationError) as raised:
         provider.get_daily_prices("RELIANCE", "1m")
+    assert wording in str(raised.value)
     assert len(responder.requests) == 1
     assert clock.sleeps == []
 
 
 @pytest.mark.parametrize(
-    ("status", "error"),
-    [(404, ProviderNotFoundError), (422, ProviderRequestError), (302, ProviderRequestError)],
+    ("status", "error", "wording"),
+    [
+        (400, ProviderRequestError, "HTTP 400 bad request"),
+        (404, ProviderNotFoundError, "no data found (HTTP 404)"),
+        (422, ProviderRequestError, "rejected the request parameters (HTTP 422 validation error"),
+        (409, ProviderRequestError, "rejected the request (HTTP 409"),
+        (302, ProviderRequestError, "redirect (HTTP 302), which is not followed"),
+        (204, ProviderResponseError, "HTTP 204 instead of 200"),
+    ],
 )
-def test_request_errors_are_not_retried(status: int, error: type[Exception]) -> None:
+def test_request_errors_are_not_retried_and_are_described_by_status(
+    status: int, error: type[Exception], wording: str
+) -> None:
     responder = Responder((status, b'{"error": "nope"}'))
     provider, _ = build(responder)
 
-    with pytest.raises(error):
+    with pytest.raises(error) as raised:
         provider.get_daily_prices("RELIANCE", "1m")
+    assert wording in str(raised.value)
+    assert "unexpected" not in str(raised.value)
     assert len(responder.requests) == 1
+
+
+def test_real_validation_error_body_is_reported_as_a_bad_request() -> None:
+    # Shape of the provider's HTTP 422 response to an unsupported period, observed 15 Sep 2026.
+    body = b'{"detail":[{"type":"enum","loc":["query","period"],"msg":"Input should be \'1m\', \'6m\', \'1yr\'"}]}'
+    responder = Responder((422, body))
+    provider, clock = build(responder)
+
+    with pytest.raises(ProviderRequestError) as raised:
+        provider.get_daily_prices("RELIANCE", "1m")
+    assert not isinstance(raised.value, ProviderAuthenticationError)
+    assert "HTTP 422 validation error" in str(raised.value)
+    assert clock.sleeps == []
+
+
+def test_bad_request_is_not_reported_as_an_authentication_failure() -> None:
+    responder = Responder((400, b'{"error": "Invalid period. Use one of 1m, 6m, 1yr"}'))
+    provider, clock = build(responder)
+
+    with pytest.raises(ProviderRequestError) as raised:
+        provider.get_daily_prices("RELIANCE", "1m")
+    assert not isinstance(raised.value, ProviderAuthenticationError)
+    assert "bad request" in str(raised.value)
+    assert len(responder.requests) == 1
+    assert clock.sleeps == []
 
 
 def test_rate_limit_stops_without_retrying() -> None:

@@ -14,6 +14,7 @@ from app.api.deps import get_now
 from app.core.config import Settings
 from app.main import create_app
 from app.market_data.models import DailyPrice, Listing
+from app.market_data.nse_calendar import NSE_TRADING_HOLIDAYS
 
 MONDAY_EVENING = datetime(2026, 9, 14, 13, 0, tzinfo=UTC)  # 18:30 IST: expected session 14 Sep
 TUESDAY_EVENING = datetime(2026, 9, 15, 13, 30, tzinfo=UTC)  # 19:00 IST: expected session 15 Sep
@@ -28,7 +29,10 @@ def make_client(migrated_database_url: str, clean_database: None) -> Iterator[Ma
     clients: list[TestClient] = []
 
     def _make(now: datetime = MONDAY_EVENING, **overrides: Any) -> TestClient:
-        settings = Settings(_env_file=None, app_env="test", database_url=migrated_database_url, **overrides)
+        # Seeded prices treat Monday 14 Sep 2026 as a normal session, so the default here is a
+        # plain weekday calendar. Tests of the real NSE calendar pass it explicitly.
+        options = {"nse_trading_holidays": [], "nse_special_trading_sessions": [], **overrides}
+        settings = Settings(_env_file=None, app_env="test", database_url=migrated_database_url, **options)
         app = create_app(settings)
         app.dependency_overrides[get_now] = lambda: now
         client = TestClient(app)
@@ -148,6 +152,83 @@ def test_price_older_than_the_latest_expected_session_is_stale(make_client: Make
     assert item["price"]["trade_date"] == "2026-09-14"
     assert body["freshness"]["expected_session_date"] == "2026-09-15"
     assert body["freshness"]["stale_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("now", "expected_status", "expected_session"),
+    [
+        (datetime(2026, 9, 13, 8, 30, tzinfo=UTC), "VALUED", "2026-09-11"),  # Sunday 14:00 IST
+        (datetime(2026, 9, 14, 4, 30, tzinfo=UTC), "VALUED", "2026-09-11"),  # Monday 10:00 IST, before EOD
+        (MONDAY_EVENING, "STALE", "2026-09-14"),  # Monday 18:30 IST: Monday's close is now expected
+    ],
+)
+def test_friday_close_over_the_weekend_follows_the_session_calendar(
+    make_client: MakeClient, db_session_factory: SessionFactory, now: datetime, expected_status: str, expected_session: str
+) -> None:
+    listing_id = add_listing(db_session_factory, "S0003032", "Infosys", nse="INFY", bse="500209")
+    add_price(db_session_factory, listing_id, date(2026, 9, 11), "1500.00")  # Friday
+    client = make_client(now=now)
+    portfolio_id = create_portfolio(client, ("NSE", "INFY", 4, "1400"))
+
+    body = valuation(client, portfolio_id)
+    item = holding(body, "INFY")
+
+    assert item["status"] == expected_status
+    assert item["price"]["trade_date"] == "2026-09-11"
+    assert item["market_value"] == "6000.00"
+    assert body["freshness"]["expected_session_date"] == expected_session
+
+
+@pytest.mark.parametrize(
+    ("now", "expected_status", "expected_session"),
+    [
+        (datetime(2026, 9, 14, 13, 30, tzinfo=UTC), "VALUED", "2026-09-11"),  # Mon 19:00 IST, Ganesh Chaturthi
+        (datetime(2026, 9, 15, 11, 30, tzinfo=UTC), "VALUED", "2026-09-11"),  # Tue 17:00 IST, before EOD
+        (datetime(2026, 9, 15, 13, 0, tzinfo=UTC), "STALE", "2026-09-15"),  # Tue 18:30 IST
+    ],
+)
+def test_friday_close_stays_valued_through_the_ganesh_chaturthi_holiday(
+    make_client: MakeClient, db_session_factory: SessionFactory, now: datetime, expected_status: str, expected_session: str
+) -> None:
+    listing_id = add_listing(db_session_factory, "S0003032", "Infosys", nse="INFY", bse="500209")
+    add_price(db_session_factory, listing_id, date(2026, 9, 11), "1037.70")  # Friday close
+    client = make_client(now=now, nse_trading_holidays=sorted(NSE_TRADING_HOLIDAYS))
+    portfolio_id = create_portfolio(client, ("NSE", "INFY", 8, "1450"))
+
+    body = valuation(client, portfolio_id)
+    item = holding(body, "INFY")
+
+    assert item["status"] == expected_status
+    assert item["price"]["trade_date"] == "2026-09-11"
+    assert body["freshness"]["expected_session_date"] == expected_session
+
+
+def test_displayed_weights_sum_to_100_while_values_stay_exact(make_client: MakeClient, db_session_factory: SessionFactory) -> None:
+    # Real closes from the M3A.1 validation; weights rounded one by one would sum to 100.01.
+    closes = (
+        (add_listing(db_session_factory, "S0003018", "Reliance Industries", nse="RELIANCE", bse="500325"), "1235.30"),
+        (add_listing(db_session_factory, "S0003020", "HDFC Bank", nse="HDFCBANK", bse="500180"), "716.55"),
+        (add_listing(db_session_factory, "S0003059", "Mahindra & Mahindra Ltd", nse="M&M", bse="500520"), "3029.50"),
+    )
+    for listing_id, close in closes:
+        add_price(db_session_factory, listing_id, date(2026, 9, 14), close)
+    client = make_client()
+    portfolio_id = create_portfolio(
+        client, ("BSE", "500325", 4, "1300"), ("NSE", "HDFCBANK", 6, "1700"), ("NSE", "M&M", 3, "2900")
+    )
+
+    body = valuation(client, portfolio_id)
+
+    weights = {item["symbol"]: item["weight_pct"] for item in body["holdings"]}
+    assert weights == {"500325": "26.96", "HDFCBANK": "23.46", "M&M": "49.58"}
+    assert sum(Decimal(weight) for weight in weights.values()) == Decimal("100.00")
+    assert [holding(body, symbol)["market_value"] for symbol in ("500325", "HDFCBANK", "M&M")] == [
+        "4941.20", "4299.30", "9088.50",
+    ]
+    assert body["totals"]["total_market_value"] == "18329.00"
+    assert body["totals"]["total_unrealized_pnl"] == "-5771.00"
+    assert body["totals"]["total_unrealized_return_pct"] == "-23.95"
+    assert "largest remainder" in body["methodology"]["rounding"]
 
 
 def test_missing_price_is_unpriced_and_never_zero(

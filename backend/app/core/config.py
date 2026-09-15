@@ -4,8 +4,11 @@ from datetime import date
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.market_data.calendar import TradingCalendar
+from app.market_data.nse_calendar import NSE_SPECIAL_TRADING_SESSIONS, NSE_TRADING_HOLIDAYS
 
 
 class Settings(BaseSettings):
@@ -37,8 +40,12 @@ class Settings(BaseSettings):
     market_data_min_request_interval_seconds: float = Field(default=1.1, ge=1.1)
     market_data_request_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
     market_data_backfill_period: Literal["1m", "6m", "1yr"] = "1yr"
-    # Exchange holidays (JSON list of ISO dates) used by the price-freshness rule.
-    nse_trading_holidays: list[date] = []
+    # NSE trading calendar for the price-freshness rules, as JSON lists of ISO dates. The
+    # defaults are the published NSE calendar in app/market_data/nse_calendar.py; setting a
+    # variable replaces its list.
+    nse_trading_holidays: list[date] = Field(default_factory=lambda: sorted(NSE_TRADING_HOLIDAYS))
+    # Exchange-declared sessions on days that are normally closed (e.g. a Sunday Budget session).
+    nse_special_trading_sessions: list[date] = Field(default_factory=lambda: sorted(NSE_SPECIAL_TRADING_SESSIONS))
 
     @field_validator("database_url", "indian_api_key", mode="before")
     @classmethod
@@ -54,9 +61,25 @@ class Settings(BaseSettings):
             raise ValueError("Market-data provider URLs must use https://")
         return value.rstrip("/")
 
+    @model_validator(mode="after")
+    def _calendar_dates_do_not_overlap(self) -> "Settings":
+        overlap = set(self.nse_trading_holidays) & set(self.nse_special_trading_sessions)
+        if overlap:
+            raise ValueError(
+                f"NSE_TRADING_HOLIDAYS and NSE_SPECIAL_TRADING_SESSIONS share dates: {sorted(overlap)}"
+            )
+        return self
+
     @property
     def market_data_configured(self) -> bool:
         return self.indian_api_key is not None
+
+    @property
+    def trading_calendar(self) -> TradingCalendar:
+        return TradingCalendar(
+            holidays=frozenset(self.nse_trading_holidays),
+            special_sessions=frozenset(self.nse_special_trading_sessions),
+        )
 
 
 @lru_cache

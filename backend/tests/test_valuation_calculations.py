@@ -6,6 +6,7 @@ import pytest
 
 from app.valuation.calculations import (
     HoldingValue,
+    display_weights_pct,
     format_money,
     format_percent,
     invested_value,
@@ -101,6 +102,36 @@ def test_weights_are_market_value_shares() -> None:
     assert weights == [Decimal("60"), Decimal("40")]
     thirds = weights_pct([Decimal("1"), Decimal("1"), Decimal("1")])
     assert [format_percent(weight or Decimal(0)) for weight in thirds] == ["33.33", "33.33", "33.33"]
+
+
+def test_displayed_weights_sum_to_exactly_100_by_largest_remainder() -> None:
+    thirds = display_weights_pct(weights_pct([Decimal("1"), Decimal("1"), Decimal("1")]))
+
+    assert thirds == [Decimal("33.34"), Decimal("33.33"), Decimal("33.33")]  # tie: earliest position
+    assert sum(thirds) == Decimal("100.00")
+    assert display_weights_pct(weights_pct([Decimal("5"), Decimal("5")])) == [Decimal("50.00"), Decimal("50.00")]
+    assert display_weights_pct(weights_pct([Decimal("26500")])) == [Decimal("100.00")]
+    assert display_weights_pct([]) == []
+
+
+def test_displayed_weights_fix_the_real_validation_portfolio() -> None:
+    # M3A.1 real-data portfolio: 4 x 1235.30, 6 x 716.55, 3 x 3029.50. Rounding each weight
+    # separately gives 26.96 + 23.46 + 49.59 = 100.01.
+    exact = weights_pct([Decimal("4941.20"), Decimal("4299.30"), Decimal("9088.50")])
+    assert sum(round_percent(weight or Decimal(0)) for weight in exact) == Decimal("100.01")
+
+    shown = display_weights_pct([weight or Decimal(0) for weight in exact])
+
+    assert shown == [Decimal("26.96"), Decimal("23.46"), Decimal("49.58")]
+    assert sum(shown) == Decimal("100.00")
+    assert all(abs(displayed - (weight or Decimal(0))) < Decimal("0.01") for displayed, weight in zip(shown, exact, strict=True))
+
+
+def test_displayed_weights_reject_inputs_that_are_not_shares_of_100() -> None:
+    with pytest.raises(ValueError):
+        display_weights_pct([Decimal("40"), Decimal("40")])
+    with pytest.raises(TypeError):
+        display_weights_pct([50.0, 50.0])  # type: ignore[list-item]
 
 
 def test_weights_are_undefined_without_positive_total() -> None:

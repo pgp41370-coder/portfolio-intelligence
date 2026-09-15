@@ -9,12 +9,13 @@ serialised, using one policy:
 * prices: shown exactly as stored (up to 4 decimal places)
 
 Totals are computed from unrounded values, so a rounded total can differ by a paisa from
-the sum of rounded rows.
+the sum of rounded rows. Displayed weights are the exception: they are allocated after
+rounding (``display_weights_pct``) so that they sum to exactly 100.00.
 """
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Context, Decimal, localcontext
+from decimal import ROUND_FLOOR, ROUND_HALF_UP, Context, Decimal, localcontext
 
 MONEY_QUANTUM = Decimal("0.01")
 PERCENT_QUANTUM = Decimal("0.01")
@@ -112,6 +113,29 @@ def weights_pct(market_values: Sequence[Decimal]) -> list[Decimal | None]:
         if total <= 0:
             return [None for _ in values]
         return [value / total * _HUNDRED for value in values]
+
+
+def display_weights_pct(weights: Sequence[Decimal]) -> list[Decimal]:
+    """Weights rounded to 2 decimal places so that the displayed values sum to exactly 100.00.
+
+    Largest-remainder allocation: each exact weight is rounded down to 0.01, and the missing
+    hundredths go one each to the weights with the largest discarded remainders (the earlier
+    position first on ties). Every displayed weight is its exact weight rounded down or up,
+    so it differs from the exact value by less than 0.01. Only the display changes; market
+    value, P&L and return never use these values.
+    """
+    exact = [_decimal(weight, "weight") for weight in weights]
+    if not exact:
+        return []
+    with localcontext(_CONTEXT):
+        shown = [weight.quantize(PERCENT_QUANTUM, rounding=ROUND_FLOOR) for weight in exact]
+        missing = int(((_HUNDRED - sum(shown, Decimal(0))) / PERCENT_QUANTUM).to_integral_value(rounding=ROUND_HALF_UP))
+        if any(weight < 0 for weight in exact) or not 0 <= missing <= len(exact):
+            raise ValueError("Weights must be non-negative and sum to 100.")
+        by_remainder = sorted(range(len(exact)), key=lambda index: (-(exact[index] - shown[index]), index))
+        for index in by_remainder[:missing]:
+            shown[index] += PERCENT_QUANTUM
+    return shown
 
 
 def round_money(value: Decimal) -> Decimal:

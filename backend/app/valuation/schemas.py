@@ -85,7 +85,10 @@ class FreshnessSummaryRead(BaseModel):
 class MethodologyRead(BaseModel):
     price_basis: Literal["NSE_EOD_CLOSE"] = "NSE_EOD_CLOSE"
     currency: Literal["INR"] = "INR"
-    rounding: str = "Money and percentages to 2 decimal places, ROUND_HALF_UP"
+    rounding: str = (
+        "Money and percentages to 2 decimal places, ROUND_HALF_UP; "
+        "displayed weights allocated by largest remainder to sum to exactly 100.00"
+    )
     note: str = METHODOLOGY_NOTE
 
 

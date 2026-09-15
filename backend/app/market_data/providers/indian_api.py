@@ -67,6 +67,7 @@ _BSE_CODE = re.compile(r"\d{6}")
 _ISIN = re.compile(r"[A-Z]{2}[A-Z0-9]{9}\d")
 _NSE_LABEL = re.compile(r"\bNSE\b")
 _DIGITS = re.compile(r"\d+")
+_API_KEY_PROBLEM = re.compile(r"\bapi[\s_-]?key\b", re.IGNORECASE)
 _REDACTED = "[redacted]"
 
 
@@ -258,17 +259,33 @@ def _snippet(body: bytes, limit: int = 120) -> str:
 
 
 def _error_for_status(status: int, body: bytes, context: str) -> MarketDataError:
-    if status in (400, 401, 403):
+    snippet = _snippet(body)
+    if status in (401, 403):
         return ProviderAuthenticationError(
-            f"{context}: the provider rejected the API key (HTTP {status}: {_snippet(body)})."
+            f"{context}: provider authentication or authorization failed (HTTP {status}: {snippet})."
         )
+    if status == 400:
+        # Context-dependent. Indian API answers a request without a key with HTTP 400 "Missing API
+        # key" (observed 15 Sep 2026); any other 400 is a bad request and does not stop the sync.
+        if _API_KEY_PROBLEM.search(snippet):
+            return ProviderAuthenticationError(f"{context}: the provider reported an API key problem (HTTP 400: {snippet}).")
+        return ProviderRequestError(f"{context}: the provider rejected the request (HTTP 400 bad request: {snippet}).")
     if status == 404:
         return ProviderNotFoundError(f"{context}: no data found (HTTP 404).")
+    if status == 422:
+        # Returned for invalid query parameters, e.g. an unsupported period (observed 15 Sep 2026).
+        return ProviderRequestError(
+            f"{context}: the provider rejected the request parameters (HTTP 422 validation error: {snippet})."
+        )
     if status == 429:
         return ProviderRateLimitError(f"{context}: rate limit reached or monthly credits exhausted (HTTP 429).")
     if 500 <= status < 600:
         return ProviderUnavailableError(f"{context}: provider error (HTTP {status}).")
-    return ProviderRequestError(f"{context}: unexpected HTTP {status} ({_snippet(body)}).")
+    if 300 <= status < 400:
+        return ProviderRequestError(f"{context}: the provider answered with a redirect (HTTP {status}), which is not followed.")
+    if 400 <= status < 500:
+        return ProviderRequestError(f"{context}: the provider rejected the request (HTTP {status}: {snippet}).")
+    return ProviderResponseError(f"{context}: the provider returned HTTP {status} instead of 200 ({snippet}).")
 
 
 # --- Security master ------------------------------------------------------------------

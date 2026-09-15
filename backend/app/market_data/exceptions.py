@@ -13,11 +13,11 @@ class ProviderNotConfiguredError(MarketDataError):
 
 
 class ProviderAuthenticationError(MarketDataError):
-    """The provider rejected the credentials (HTTP 400 missing key, 401, 403). Never retried."""
+    """The provider rejected the credentials (HTTP 401, 403, or 400 reporting an API key problem). Never retried."""
 
 
 class ProviderRequestError(MarketDataError):
-    """The provider rejected a single request, e.g. an unknown symbol. Never retried."""
+    """The provider rejected a single request (e.g. HTTP 400 bad request, unknown symbol). Never retried."""
 
 
 class ProviderNotFoundError(ProviderRequestError):

@@ -24,7 +24,9 @@ def status_client(migrated_database_url: str, clean_database: None) -> Iterator[
     clients: list[TestClient] = []
 
     def _make(**overrides: Any) -> TestClient:
-        settings = Settings(_env_file=None, app_env="test", database_url=migrated_database_url, **overrides)
+        # Seeded prices treat Monday 14 Sep 2026 as a normal session (plain weekday calendar).
+        options = {"nse_trading_holidays": [], "nse_special_trading_sessions": [], **overrides}
+        settings = Settings(_env_file=None, app_env="test", database_url=migrated_database_url, **options)
         app = create_app(settings)
         app.dependency_overrides[get_now] = lambda: MONDAY_EVENING
         client = TestClient(app)
@@ -122,6 +124,31 @@ def test_api_key_is_hidden_in_settings_repr() -> None:
     assert settings.market_data_configured is True
     assert TEST_KEY not in repr(settings)
     assert TEST_KEY not in str(settings.model_dump())
+
+
+def test_default_trading_calendar_is_the_published_2026_nse_calendar() -> None:
+    calendar = Settings(_env_file=None).trading_calendar
+
+    assert len(calendar.holidays) == 16
+    assert date(2026, 9, 14) in calendar.holidays  # Ganesh Chaturthi
+    assert calendar.special_sessions == frozenset({date(2026, 2, 1)})  # Union Budget, Sunday
+    assert not calendar.is_session_day(date(2026, 9, 14))
+    assert calendar.is_session_day(date(2026, 2, 1))
+
+
+def test_trading_calendar_lists_can_be_replaced_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NSE_TRADING_HOLIDAYS", '["2027-01-26"]')
+    monkeypatch.setenv("NSE_SPECIAL_TRADING_SESSIONS", "[]")
+
+    calendar = Settings(_env_file=None).trading_calendar
+
+    assert calendar.holidays == frozenset({date(2027, 1, 26)})
+    assert calendar.special_sessions == frozenset()
+
+
+def test_a_date_cannot_be_both_holiday_and_special_session_in_settings() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, nse_trading_holidays=[date(2026, 9, 14)], nse_special_trading_sessions=[date(2026, 9, 14)])
 
 
 @pytest.mark.parametrize(

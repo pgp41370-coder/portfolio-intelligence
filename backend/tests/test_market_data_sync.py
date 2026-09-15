@@ -11,16 +11,20 @@ from sqlalchemy import Engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
+from app.market_data.calendar import IST
 from app.market_data.exceptions import (
     ProviderAuthenticationError,
     ProviderGranularityError,
+    ProviderNotFoundError,
     ProviderRateLimitError,
+    ProviderRequestError,
     ProviderResponseError,
     ProviderUnavailableError,
     SyncAlreadyRunningError,
 )
 from app.market_data.ingestion.sync import SYNC_LOCK_ID, SyncOutcome, sync_daily_prices, sync_security_master
 from app.market_data.models import DailyPrice, Listing, MarketDataSyncRun
+from app.market_data.nse_calendar import NSE_SPECIAL_TRADING_SESSIONS, NSE_TRADING_HOLIDAYS
 from app.market_data.providers.indian_api import parse_historical_prices, parse_security_master
 from app.market_data.records import DailyPriceBar, DailyPriceSeries, SecurityMasterSnapshot
 from app.portfolios.rules import Exchange
@@ -50,7 +54,16 @@ def all_history() -> dict[str, DailyPriceSeries]:
 
 @pytest.fixture
 def sync_settings(migrated_database_url: str) -> Settings:
-    return Settings(_env_file=None, app_env="test", database_url=migrated_database_url, indian_api_key="test-key-not-real")
+    # The recorded fixtures treat Monday 14 Sep 2026 as a normal session, so these tests use a
+    # plain weekday calendar. Tests of the real NSE calendar pass it explicitly.
+    return Settings(
+        _env_file=None,
+        app_env="test",
+        database_url=migrated_database_url,
+        indian_api_key="test-key-not-real",
+        nse_trading_holidays=[],
+        nse_special_trading_sessions=[],
+    )
 
 
 @pytest.fixture
@@ -342,6 +355,177 @@ def test_authentication_and_outage_errors_stop_the_sync(
 
     assert provider.calls == [("INFY", "1yr")]
     assert outcome.status == "failed"
+
+
+@pytest.mark.usefixtures("load_listings")
+def test_a_single_bad_request_does_not_stop_the_sync(
+    make_portfolio: Callable[..., str], run_prices: Callable[..., SyncOutcome], db_session_factory: SessionFactory
+) -> None:
+    make_portfolio(("NSE", "INFY"), ("NSE", "RELIANCE"))
+    provider = FakeProvider(series=all_history(), errors={"INFY": ProviderRequestError("HTTP 400: invalid request")})
+
+    outcome = run_prices(provider)
+
+    assert provider.calls == [("INFY", "1yr"), ("RELIANCE", "1yr")]
+    assert outcome.status == "partial"
+    assert outcome.failures == 1
+    assert len(prices_for(db_session_factory, "RELIANCE")) == 6
+
+
+@pytest.mark.usefixtures("load_listings")
+def test_repeated_rejections_stop_the_sync_before_spending_more_requests(
+    make_portfolio: Callable[..., str], run_prices: Callable[..., SyncOutcome]
+) -> None:
+    make_portfolio(("NSE", "HDFCBANK"), ("NSE", "INFY"), ("NSE", "M&M"), ("NSE", "RELIANCE"), ("NSE", "TCS"))
+    errors: dict[object, Exception] = {
+        "HDFCBANK": ProviderRequestError("HTTP 400"),
+        "INFY": ProviderNotFoundError("HTTP 404"),  # a missing security is not a provider-wide failure
+        "M&M": ProviderResponseError("error body with HTTP 200"),
+        "RELIANCE": ProviderRequestError("HTTP 400"),
+    }
+    provider = FakeProvider(series=all_history(), errors=errors)
+
+    outcome = run_prices(provider)
+
+    assert [symbol for symbol, _ in provider.calls] == ["HDFCBANK", "INFY", "M&M", "RELIANCE"]
+    assert outcome.status == "failed"
+    assert outcome.requests_made == 4
+    assert "consecutive" in (outcome.error_summary or "")
+
+
+# --- Completed sessions only ------------------------------------------------------------
+
+
+def ist_on(day: date, hour: int, minute: int = 0) -> datetime:
+    return datetime(day.year, day.month, day.day, hour, minute, tzinfo=IST)
+
+
+def with_nse_calendar(settings: Settings) -> Settings:
+    return settings.model_copy(
+        update={
+            "nse_trading_holidays": sorted(NSE_TRADING_HOLIDAYS),
+            "nse_special_trading_sessions": sorted(NSE_SPECIAL_TRADING_SESSIONS),
+        }
+    )
+
+
+@pytest.mark.usefixtures("load_listings")
+@pytest.mark.parametrize(
+    ("hour", "minute", "latest_stored"),
+    [
+        (16, 0, date(2026, 9, 11)),  # the provider already shows a Monday bar: ignored
+        (17, 59, date(2026, 9, 11)),
+        (18, 0, date(2026, 9, 14)),  # Monday's close is now a completed session close
+        (19, 0, date(2026, 9, 14)),
+    ],
+)
+def test_current_session_bar_is_stored_only_from_eod_availability(
+    make_portfolio: Callable[..., str],
+    run_prices: Callable[..., SyncOutcome],
+    db_session_factory: SessionFactory,
+    hour: int,
+    minute: int,
+    latest_stored: date,
+) -> None:
+    make_portfolio(("NSE", "RELIANCE"))
+
+    outcome = run_prices(FakeProvider(series=all_history()), now=ist_on(date(2026, 9, 14), hour, minute))
+
+    assert outcome.status == "succeeded"
+    assert prices_for(db_session_factory, "RELIANCE")[-1].trade_date == latest_stored
+    ignored = [] if latest_stored == date(2026, 9, 14) else [
+        {"symbol": "RELIANCE", "trade_date": "2026-09-14", "reason": "session_not_complete"}
+    ]
+    assert outcome.details["ignored_bars"] == ignored
+
+
+@pytest.mark.usefixtures("load_listings")
+def test_early_bar_never_overwrites_the_previous_close_and_is_requested_after_the_cutoff(
+    make_portfolio: Callable[..., str], run_prices: Callable[..., SyncOutcome], db_session_factory: SessionFactory
+) -> None:
+    make_portfolio(("NSE", "RELIANCE"))
+    full = history("RELIANCE")
+    run_prices(FakeProvider(series={"RELIANCE": replace(full, bars=full.bars[:-1])}), now=ist_on(date(2026, 9, 11), 19))
+    friday = prices_for(db_session_factory, "RELIANCE")[-1]
+
+    # Monday 16:00: the provider already shows a Monday bar with a provisional price.
+    provisional = full.bars[:-1] + (replace(full.bars[-1], close_price=Decimal("2600.0000")),)
+    early = run_prices(
+        FakeProvider(series={"RELIANCE": replace(full, bars=provisional)}), now=ist_on(date(2026, 9, 14), 16), force=True
+    )
+
+    rows = prices_for(db_session_factory, "RELIANCE")
+    assert (early.records_inserted, early.records_updated) == (0, 0)
+    assert rows[-1].trade_date == date(2026, 9, 11)
+    assert (rows[-1].close_price, rows[-1].fetched_at) == (friday.close_price, friday.fetched_at)
+
+    # Monday 18:30: the security is requested again and the completed Monday close is stored.
+    later = FakeProvider(series=all_history())
+    run_prices(later, now=ist_on(date(2026, 9, 14), 18, 30))
+
+    assert later.calls == [("RELIANCE", "1m")]
+    latest = prices_for(db_session_factory, "RELIANCE")[-1]
+    assert (latest.trade_date, latest.close_price) == (date(2026, 9, 14), Decimal("2650.0000"))
+
+
+def budget_day_series() -> DailyPriceSeries:
+    # 1347.00 is the provider's real RELIANCE close for the 1 Feb 2026 Sunday session; the
+    # two earlier closes are illustrative.
+    bars = (
+        DailyPriceBar(trade_date=date(2026, 1, 29), close_price=Decimal("1395.0000"), volume=1000),
+        DailyPriceBar(trade_date=date(2026, 1, 30), close_price=Decimal("1390.0000"), volume=1000),
+        DailyPriceBar(trade_date=date(2026, 2, 1), close_price=Decimal("1347.0000"), volume=1000),
+    )
+    return DailyPriceSeries(symbol="RELIANCE", exchange=Exchange.NSE, bars=bars, skipped_points=0)
+
+
+@pytest.mark.usefixtures("load_listings")
+@pytest.mark.parametrize(
+    ("special_sessions", "latest_stored", "ignored"),
+    [
+        ([date(2026, 2, 1)], date(2026, 2, 1), []),
+        ([], date(2026, 1, 30), [{"symbol": "RELIANCE", "trade_date": "2026-02-01", "reason": "not_a_session_day"}]),
+    ],
+)
+def test_sunday_bar_is_stored_only_for_a_configured_special_session(
+    make_portfolio: Callable[..., str],
+    run_prices: Callable[..., SyncOutcome],
+    db_session_factory: SessionFactory,
+    sync_settings: Settings,
+    special_sessions: list[date],
+    latest_stored: date,
+    ignored: list[dict[str, str]],
+) -> None:
+    make_portfolio(("NSE", "RELIANCE"))
+    settings = sync_settings.model_copy(update={"nse_special_trading_sessions": special_sessions})
+
+    outcome = run_prices(
+        FakeProvider(series={"RELIANCE": budget_day_series()}), now=ist_on(date(2026, 2, 1), 19), settings=settings
+    )
+
+    assert outcome.details["expected_session"] == latest_stored.isoformat()
+    assert prices_for(db_session_factory, "RELIANCE")[-1].trade_date == latest_stored
+    assert outcome.details["ignored_bars"] == ignored
+
+
+@pytest.mark.usefixtures("load_listings")
+def test_bar_dated_on_a_configured_holiday_is_never_stored(
+    make_portfolio: Callable[..., str],
+    run_prices: Callable[..., SyncOutcome],
+    db_session_factory: SessionFactory,
+    sync_settings: Settings,
+) -> None:
+    make_portfolio(("NSE", "RELIANCE"))  # the fixture history has a bar dated 14 Sep 2026, Ganesh Chaturthi
+
+    outcome = run_prices(
+        FakeProvider(series=all_history()), now=ist_on(date(2026, 9, 15), 19), settings=with_nse_calendar(sync_settings)
+    )
+
+    assert outcome.details["expected_session"] == "2026-09-15"
+    assert prices_for(db_session_factory, "RELIANCE")[-1].trade_date == date(2026, 9, 11)
+    assert outcome.details["ignored_bars"] == [
+        {"symbol": "RELIANCE", "trade_date": "2026-09-14", "reason": "not_a_session_day"}
+    ]
 
 
 @pytest.mark.usefixtures("load_listings")

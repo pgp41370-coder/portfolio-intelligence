@@ -38,7 +38,7 @@ Provider abstraction                 ✅
 Indian API adapter + validation      ✅  (verified against documented formats and fixtures)
 Security master                      ✅  (real provider list loaded locally: 5,540 securities)
 daily_prices + sync run tracking     ✅
-NSE EOD price ingestion              ✅  (fixture-driven; first real price sync pending an API key)
+NSE EOD price ingestion              ✅  (validated with real provider data in M3A.1)
 Rate limits + request budget         ✅
 Freshness rules                      ✅
 Valuation engine (Decimal)           ✅
@@ -50,6 +50,20 @@ Documentation                        ✅
 
 NEXT MILESTONE:
 Production backend + first real price sync (not started)
+```
+
+```
+MILESTONE 3A.1: REAL PROVIDER VALIDATION + HARDENING
+
+Real provider validation (5 NSE symbols)  ✅  latest closes matched NSE official figures to the paisa
+1yr history granularity                   ✅  daily (248 points per symbol)
+Real-data end-to-end valuation            ✅  API and UI, independently recalculated
+HTTP status handling                      ✅  401/403 auth, 400 context-dependent, 422 validation, 429 rate limit
+Stop after repeated rejections            ✅
+2026 NSE trading calendar                 ✅  16 holidays + Sunday 1 Feb 2026 special session
+Completed-session-only price storage      ✅
+Displayed weights sum to 100.00%          ✅
+Production deployment                     ⛔  not started (write protection + rate limiting required first)
 ```
 
 ## Milestone 3A details
@@ -65,8 +79,8 @@ Production backend + first real price sync (not started)
 
 ## Known limitations
 
-- **No real price sync has run yet.** `INDIAN_API_KEY` is not configured. The adapter follows the provider's documentation and is tested with recorded-format fixtures; the first real sync must confirm the response shape, unadjusted recent closes and daily granularity of longer periods.
+- **Real provider validated locally (M3A.1).** Adjustment methodology could not be independently established from the provider response/documentation.
 - **Production has no backend or database.** Valuation works locally only.
-- BSE-only securities are unpriced; ISIN is not populated; NSE holidays must be configured manually.
+- BSE-only securities are unpriced; ISIN is not populated; the NSE trading calendar must be updated each year.
 - Not adjusted for corporate actions; not a total return; not real-time.
 - No user accounts: this is a demonstration MVP.

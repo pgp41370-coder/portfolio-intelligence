@@ -21,6 +21,7 @@ from app.portfolios.rules import Exchange
 from app.portfolios.service import get_portfolio
 from app.valuation.calculations import (
     HoldingValue,
+    display_weights_pct,
     invested_value,
     portfolio_totals,
     value_holding,
@@ -61,7 +62,7 @@ def value_portfolio(
     now: datetime,
 ) -> PortfolioValuationRead:
     portfolio = get_portfolio(session, portfolio_id)
-    expected = latest_expected_session(now, frozenset(settings.nse_trading_holidays))
+    expected = latest_expected_session(now, settings.trading_calendar)
     lookups = lookup_latest_prices(
         session,
         settings.market_data_provider,
@@ -90,7 +91,11 @@ def value_portfolio(
         )
 
     priced_values = [row.value for row in rows if row.value is not None]
-    weights = iter(weights_pct([value.market_value for value in priced_values]))
+    exact_weights = weights_pct([value.market_value for value in priced_values])
+    # Displayed weights are allocated after rounding so that they sum to exactly 100.00.
+    positive_weights = [weight for weight in exact_weights if weight is not None]
+    shown_weights = display_weights_pct(positive_weights) if len(positive_weights) == len(exact_weights) else exact_weights
+    weights = iter(shown_weights)
     totals = portfolio_totals([row.invested for row in rows], priced_values)
     price_dates = [row.price.trade_date for row in rows if row.price is not None]
 

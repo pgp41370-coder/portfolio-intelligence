@@ -11,7 +11,7 @@ import logging
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -22,7 +22,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import Settings
 from app.market_data import repository
 from app.market_data.budget import RequestBudget
-from app.market_data.calendar import eod_available_at, ist_month_start, latest_expected_session, now_utc
+from app.market_data.calendar import (
+    TradingCalendar,
+    eod_available_at,
+    is_completed_session_close,
+    ist_month_start,
+    latest_expected_session,
+    now_utc,
+)
 from app.market_data.exceptions import (
     MarketDataError,
     ProviderAuthenticationError,
@@ -50,6 +57,9 @@ BACKFILL_GAP_DAYS = 28
 LARGE_MOVE_THRESHOLD = Decimal("0.35")
 MIN_MASTER_RETENTION = Decimal("0.5")
 MAX_ERRORS_RECORDED = 25
+# Several rejected or invalid responses in a row usually mean every request will fail (for example
+# an error body returned with HTTP 200), so the sync stops instead of spending the monthly budget.
+MAX_CONSECUTIVE_REJECTIONS = 3
 MAX_ERROR_SUMMARY_LENGTH = 1000
 
 Clock = Callable[[], datetime]
@@ -117,6 +127,11 @@ class _Progress:
     no_data: list[str] = field(default_factory=list)
     large_price_moves: list[dict[str, str]] = field(default_factory=list)
     errors: list[dict[str, str]] = field(default_factory=list)
+    ignored_bars: list[dict[str, str]] = field(default_factory=list)
+
+    def record_ignored_bar(self, symbol: str, trade_date: date, reason: str) -> None:
+        if len(self.ignored_bars) < MAX_ERRORS_RECORDED:
+            self.ignored_bars.append({"symbol": symbol, "trade_date": trade_date.isoformat(), "reason": reason})
 
     def record_failure(self, symbol: str, error: MarketDataError) -> None:
         self.failures += 1
@@ -141,6 +156,7 @@ class _Progress:
             "weekly_fallbacks": self.weekly_fallbacks,
             "no_data": self.no_data,
             "large_price_moves": self.large_price_moves,
+            "ignored_bars": self.ignored_bars,
             "errors": self.errors,
         }
 
@@ -225,7 +241,7 @@ def plan_price_sync(
     force: bool = False,
 ) -> PriceSyncPlan:
     """Decide which held NSE securities need a request, without calling the provider."""
-    expected = latest_expected_session(now, frozenset(settings.nse_trading_holidays))
+    expected = latest_expected_session(now, settings.trading_calendar)
     keys = repository.held_security_keys(session, portfolio_id)
     nse_symbols = {code for exchange, code in keys if exchange is Exchange.NSE}
     bse_codes = {code for exchange, code in keys if exchange is Exchange.BSE}
@@ -314,7 +330,7 @@ def sync_daily_prices(
                 limit=settings.market_data_monthly_request_budget,
                 used_before_run=repository.requests_used_since(session, provider.name, ist_month_start(now)),
             )
-            return _execute_plan(session, run, clock, provider, plan, budget)
+            return _execute_plan(session, run, clock, provider, plan, budget, settings.trading_calendar)
         except Exception:
             session.rollback()
             _finish_run(session, run, clock, status="failed", error="Unexpected error during the price sync; see server logs.")
@@ -328,10 +344,12 @@ def _execute_plan(
     provider: MarketDataProvider,
     plan: PriceSyncPlan,
     budget: RequestBudget,
+    calendar: TradingCalendar,
 ) -> SyncOutcome:
     progress = _Progress()
     stop_status: str | None = None
     stop_error: str | None = None
+    consecutive_rejections = 0
     provider.set_request_guard(budget.consume)
     try:
         for planned in plan.requests:
@@ -353,7 +371,17 @@ def _execute_plan(
                 status = "not_found" if isinstance(exc, ProviderNotFoundError) else "invalid_response"
                 repository.mark_price_request(session, planned.listing_id, requested_at=clock(), status=status)
                 logger.warning("Price sync for %s failed: %s", planned.nse_symbol, exc)
+                if not isinstance(exc, ProviderNotFoundError):
+                    consecutive_rejections += 1
+                    if consecutive_rejections >= MAX_CONSECUTIVE_REJECTIONS:
+                        stop_status = "failed"
+                        stop_error = (
+                            f"Stopped after {consecutive_rejections} consecutive rejected or invalid provider "
+                            "responses; the provider may be failing every request."
+                        )
             else:
+                consecutive_rejections = 0
+                series = _completed_session_closes(series, plan.expected_session, calendar, progress)
                 fetched_at = clock()
                 counts = repository.upsert_daily_prices(
                     session,
@@ -414,6 +442,29 @@ def _fetch_series(
             f"historical prices for {planned.nse_symbol}: provider returned {series.exchange} prices for {series.symbol}."
         )
     return series, period
+
+
+def _completed_session_closes(
+    series: DailyPriceSeries,
+    expected_session: date,
+    calendar: TradingCalendar,
+    progress: _Progress,
+) -> DailyPriceSeries:
+    """Keep only bars that are completed NSE session closes.
+
+    A bar for the current session before its 18:00 IST availability, a future date, or a day
+    that is not a session in the configured calendar is recorded in the run details and never
+    stored, so it cannot be shown as an end-of-day close or overwrite an earlier close.
+    """
+    kept = []
+    for bar in series.bars:
+        if is_completed_session_close(bar.trade_date, expected_session, calendar):
+            kept.append(bar)
+        elif not calendar.is_session_day(bar.trade_date):
+            progress.record_ignored_bar(series.symbol, bar.trade_date, "not_a_session_day")
+        else:
+            progress.record_ignored_bar(series.symbol, bar.trade_date, "session_not_complete")
+    return series if len(kept) == len(series.bars) else replace(series, bars=tuple(kept))
 
 
 def _large_price_moves(series: DailyPriceSeries) -> list[dict[str, str]]:
