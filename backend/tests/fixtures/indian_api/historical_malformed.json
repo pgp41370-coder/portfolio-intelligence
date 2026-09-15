@@ -1,0 +1,7 @@
+{
+  "datasets": {
+    "metric": "Price",
+    "label": "Price on NSE",
+    "values": "2650.00"
+  }
+}

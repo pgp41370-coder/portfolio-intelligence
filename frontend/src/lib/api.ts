@@ -161,6 +161,67 @@ export function importCsv(name: string, file: File): Promise<PortfolioDetail> {
   return request("/portfolios/csv-import", { method: "POST", body: form });
 }
 
+export type ValuationStatus = "VALUED" | "STALE" | "UNPRICED";
+export type UnpricedReason = "LISTING_NOT_FOUND" | "NO_NSE_LISTING" | "NO_PRICE_DATA";
+export type HoldingWarning = "LARGE_PRICE_MOVE";
+
+/** A dated NSE end-of-day closing price. Never a live price. */
+export type ValuationPrice = {
+  close_price: string;
+  trade_date: string;
+  exchange: Exchange;
+  source: string;
+  source_name: string;
+  fetched_at: string;
+};
+
+/** Monetary and percentage values are decimal strings; null means unavailable, never zero. */
+export type HoldingValuation = {
+  holding_id: string;
+  symbol: string;
+  exchange: Exchange;
+  quantity: number;
+  average_buy_price: string;
+  status: ValuationStatus;
+  unpriced_reason: UnpricedReason | null;
+  price: ValuationPrice | null;
+  invested_value: string;
+  market_value: string | null;
+  unrealized_pnl: string | null;
+  unrealized_return_pct: string | null;
+  weight_pct: string | null;
+  warnings: HoldingWarning[];
+};
+
+export type PortfolioValuation = {
+  portfolio_id: string;
+  portfolio_name: string;
+  valued_at: string;
+  market_data_configured: boolean;
+  methodology: { price_basis: "NSE_EOD_CLOSE"; currency: "INR"; rounding: string; note: string };
+  freshness: {
+    expected_session_date: string;
+    latest_price_date: string | null;
+    oldest_price_date: string | null;
+    valued_count: number;
+    stale_count: number;
+    unpriced_count: number;
+  };
+  totals: {
+    total_invested_value: string;
+    priced_invested_value: string;
+    total_market_value: string | null;
+    total_unrealized_pnl: string | null;
+    total_unrealized_return_pct: string | null;
+    is_complete: boolean;
+  };
+  holdings: HoldingValuation[];
+};
+
+export function getPortfolioValuation(portfolioId: string): Promise<PortfolioValuation> {
+  return request(`/portfolios/${encodeURIComponent(portfolioId)}/valuation`);
+}
+
 export function describeError(error: unknown): string {
   if (error instanceof ApiError) {
     const messages = error.details.map((detail) => detail.message).filter(Boolean);

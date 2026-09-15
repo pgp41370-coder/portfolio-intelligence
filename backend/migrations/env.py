@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, pool
 from app.core.config import Settings
 from app.db.base import Base
 from app.db.database import normalize_database_url
+from app.market_data import models as market_data_models  # noqa: F401  (registers tables on Base.metadata)
 from app.portfolios import models  # noqa: F401  (registers tables on Base.metadata)
 
 config = context.config

@@ -1,6 +1,7 @@
 """Shared FastAPI dependencies."""
 
 from collections.abc import Iterator
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.db.database import get_session_factory
+from app.market_data.calendar import now_utc
 
 
 def get_app_settings(request: Request) -> Settings:
@@ -28,3 +30,11 @@ def get_db_session(settings: SettingsDep) -> Iterator[Session]:
 
 
 SessionDep = Annotated[Session, Depends(get_db_session)]
+
+
+def get_now() -> datetime:
+    """The current time; overridden in tests to make freshness deterministic."""
+    return now_utc()
+
+
+NowDep = Annotated[datetime, Depends(get_now)]

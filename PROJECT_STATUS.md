@@ -29,26 +29,44 @@ Portfolio display          ✅
 Tests                      ✅
 Security review            ✅
 Production build           ✅
-
-NEXT MILESTONE:
-Market Data (not started)
 ```
 
-## Milestone 2 details
+```
+MILESTONE 3A: MARKET DATA + PORTFOLIO VALUATION
+
+Provider abstraction                 ✅
+Indian API adapter + validation      ✅  (verified against documented formats and fixtures)
+Security master                      ✅  (real provider list loaded locally: 5,540 securities)
+daily_prices + sync run tracking     ✅
+NSE EOD price ingestion              ✅  (fixture-driven; first real price sync pending an API key)
+Rate limits + request budget         ✅
+Freshness rules                      ✅
+Valuation engine (Decimal)           ✅
+Valuation + status API               ✅
+Valuation UI                         ✅
+Tests                                ✅
+Security audit                       ✅
+Documentation                        ✅
+
+NEXT MILESTONE:
+Production backend + first real price sync (not started)
+```
+
+## Milestone 3A details
 
 | Item | Result |
 |---|---|
-| Completed | 15 September 2026 |
-| Data model | `portfolios` → `holdings` (UUID keys, cascade foreign key, unique symbol per exchange per portfolio, check constraints for quantity, price, exchange and symbol format) |
-| Migration | Alembic revision `20260915_0001`; rebuilds from scratch in tests; `alembic check` reports no drift from the models |
-| API | Create, list and retrieve portfolios; add and delete holdings; CSV preview and CSV import |
-| Backend tests | 149 passed with PostgreSQL (98 run and 51 skip without `TEST_DATABASE_URL`) |
-| Frontend checks | ESLint clean; production build succeeds |
-| Manual testing | Manual entry, validation errors, add/remove holdings, review, save, CSV errors, CSV import, portfolio display and holding deletion verified in the browser against local PostgreSQL; no horizontal overflow at 375 px |
+| Completed | 15 September 2026 (local) |
+| Migration | `20260915_0002` adds `listings`, `daily_prices`, `market_data_sync_runs`; M2 tables unchanged |
+| Methodology | Latest dated NSE end-of-day close; Decimal arithmetic; 2-dp ROUND_HALF_UP on output; VALUED / STALE / UNPRICED |
+| Backend tests | 290 passed with PostgreSQL (202 run and 88 skip without `TEST_DATABASE_URL`) |
+| Frontend checks | ESLint clean; TypeScript clean; 8 valuation display unit tests pass; production build succeeds |
+| Manual testing | Valuation verified in the browser with fixture prices: fresh, stale, BSE via NSE, BSE-only, no data, unknown symbol, large move, partial totals, valuation failure fallback; no horizontal overflow at 375 px |
 
 ## Known limitations
 
-- **Production has no backend or database.** The Vercel deployment shows the portfolio interface but reports that storage is unavailable. The complete flow works locally. Deploying the API and connecting Supabase PostgreSQL is a separate, planned step.
+- **No real price sync has run yet.** `INDIAN_API_KEY` is not configured. The adapter follows the provider's documentation and is tested with recorded-format fixtures; the first real sync must confirm the response shape, unadjusted recent closes and daily granularity of longer periods.
+- **Production has no backend or database.** Valuation works locally only.
+- BSE-only securities are unpriced; ISIN is not populated; NSE holidays must be configured manually.
+- Not adjusted for corporate actions; not a total return; not real-time.
 - No user accounts: this is a demonstration MVP.
-- Symbols are validated for format only, not against NSE/BSE listings.
-- No market data; total invested capital is the only calculated value and is not a market value.

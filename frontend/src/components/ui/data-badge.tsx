@@ -1,16 +1,18 @@
-type DataKind = "input" | "calculated";
+type DataKind = "input" | "calculated" | "market";
 
 const labels: Record<DataKind, string> = {
   input: "Your input",
   calculated: "Calculated",
+  market: "Market data",
 };
 
 const styles: Record<DataKind, string> = {
   input: "border-line-strong bg-surface text-ink-muted",
   calculated: "border-accent/30 bg-accent-soft text-accent",
+  market: "border-brand/25 bg-canvas text-brand",
 };
 
-/** Marks a value as either entered by the user or derived from their inputs. */
+/** Marks where a value comes from: the user, a calculation, or stored market data. */
 export function DataBadge({ kind }: { kind: DataKind }) {
   return (
     <span
@@ -28,7 +30,10 @@ export function DataLegend() {
         <DataBadge kind="input" /> Values you entered
       </span>
       <span className="flex items-center gap-2">
-        <DataBadge kind="calculated" /> Derived from your inputs. No market data is used.
+        <DataBadge kind="market" /> Dated NSE end-of-day closing prices
+      </span>
+      <span className="flex items-center gap-2">
+        <DataBadge kind="calculated" /> Derived from your inputs and those prices
       </span>
     </p>
   );

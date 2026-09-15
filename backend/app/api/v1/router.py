@@ -6,7 +6,7 @@ Each finance module gets its own router module and is mounted here.
 from fastapi import APIRouter
 
 from app.api.deps import SettingsDep
-from app.api.v1 import portfolios
+from app.api.v1 import market_data, portfolios, valuation
 from app.schemas.system import ApiInfoResponse
 
 api_router = APIRouter(prefix="/api/v1")
@@ -23,3 +23,5 @@ def api_info(settings: SettingsDep) -> ApiInfoResponse:
 
 
 api_router.include_router(portfolios.router)
+api_router.include_router(valuation.router)
+api_router.include_router(market_data.router)

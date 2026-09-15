@@ -7,12 +7,14 @@ from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, make_url, text
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 from app.db.database import normalize_database_url
 from app.main import create_app
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+ALL_TABLES = ("daily_prices", "market_data_sync_runs", "listings", "holdings", "portfolios")
 
 
 @pytest.fixture
@@ -71,9 +73,18 @@ def db_engine(migrated_database_url: str) -> Iterator[Engine]:
 
 
 @pytest.fixture
-def db_client(migrated_database_url: str, db_engine: Engine) -> Iterator[TestClient]:
+def clean_database(db_engine: Engine) -> None:
     with db_engine.begin() as connection:
-        connection.execute(text("TRUNCATE holdings, portfolios"))
+        connection.execute(text(f"TRUNCATE {', '.join(ALL_TABLES)}"))
+
+
+@pytest.fixture
+def db_session_factory(db_engine: Engine, clean_database: None) -> sessionmaker[Session]:
+    return sessionmaker(bind=db_engine, expire_on_commit=False)
+
+
+@pytest.fixture
+def db_client(migrated_database_url: str, clean_database: None) -> Iterator[TestClient]:
     settings = Settings(_env_file=None, app_env="test", database_url=migrated_database_url)
     with TestClient(create_app(settings)) as test_client:
         yield test_client
@@ -82,7 +93,7 @@ def db_client(migrated_database_url: str, db_engine: Engine) -> Iterator[TestCli
 @pytest.fixture
 def count_rows(db_engine: Engine) -> Callable[[str], int]:
     def _count(table: str) -> int:
-        assert table in {"portfolios", "holdings"}
+        assert table in ALL_TABLES
         with db_engine.connect() as connection:
             return int(connection.scalar(text(f"SELECT count(*) FROM {table}")) or 0)
 

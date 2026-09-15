@@ -1,0 +1,19 @@
+[
+  { "bse-code": "500325", "name": "Reliance Industries", "id": "S0003018", "nse-code": "RELIANCE" },
+  { "bse-code": "500180", "name": "HDFC Bank", "id": "S0003020", "nse-code": "HDFCBANK" },
+  { "bse-code": "532540", "name": "Tata Consultancy Services", "id": "S0003051", "nse-code": "TCS" },
+  { "bse-code": "500209", "name": "Infosys", "id": "S0003032", "nse-code": "INFY" },
+  { "bse-code": "500520", "name": "Mahindra & Mahindra Ltd", "id": "S0003059", "nse-code": "M&M" },
+  { "bse-code": "532720", "name": "Mahindra & Mahindra Financial Services Ltd", "id": "S0003076", "nse-code": "M&MFIN" },
+  { "bse-code": "539097", "name": "UR Sugar Industries", "id": "S0000064", "nse-code": "" },
+  { "bse-code": "526821", "name": "Dai-Ichi Karkaria Ltd", "id": "S0000105", "nse-code": "null" },
+  { "bse-code": "", "name": "Kothari Sugars and Chemicals", "id": "S0004774", "nse-code": "KOTARISUG" },
+  { "bse-code": "null", "name": "Sadhav Shipping", "id": "S0005722", "nse-code": "SADHAV" },
+  { "bse-code": "111111", "name": "Fixture Duplicate Symbol A", "id": "T0000001", "nse-code": "DUPSYM" },
+  { "bse-code": "222222", "name": "Fixture Duplicate Symbol B", "id": "T0000002", "nse-code": "DUPSYM" },
+  { "bse-code": "null", "name": "Fixture No Codes", "id": "T0000003", "nse-code": "null" },
+  { "bse-code": "12AB", "name": "Fixture Bad Codes", "id": "T0000004", "nse-code": "BAD CODE" },
+  { "name": "Fixture Missing Id", "nse-code": "MISSINGID" },
+  "not an object",
+  { "bse-code": "500325", "name": "Fixture Duplicate Id", "id": "S0003018", "nse-code": "RELDUP" }
+]

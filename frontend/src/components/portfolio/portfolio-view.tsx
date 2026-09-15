@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { HoldingsTable } from "@/components/portfolio/holdings-table";
 import { InvestedCapitalCard } from "@/components/portfolio/invested-capital-card";
 import { PageHeader } from "@/components/portfolio/page-header";
+import { PortfolioValuation } from "@/components/portfolio/portfolio-valuation";
 import { ServiceUnavailable } from "@/components/portfolio/service-unavailable";
 import { Alert } from "@/components/ui/alert";
 import { DataBadge, DataLegend } from "@/components/ui/data-badge";
@@ -47,6 +48,7 @@ export function PortfolioView({ portfolioId, justCreated }: PortfolioViewProps) 
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string>();
+  const [valuationRefresh, setValuationRefresh] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -69,6 +71,7 @@ export function PortfolioView({ portfolioId, justCreated }: PortfolioViewProps) 
       await deleteHolding(portfolioId, holdingId);
       setState({ status: "ready", portfolio: await getPortfolio(portfolioId) });
       setShowSaved(false);
+      setValuationRefresh((value) => value + 1);
     } catch (error) {
       setActionError(describeError(error));
     } finally {
@@ -141,11 +144,13 @@ export function PortfolioView({ portfolioId, justCreated }: PortfolioViewProps) 
 
       <DataLegend />
 
+      <PortfolioValuation portfolioId={portfolioId} refreshToken={valuationRefresh} />
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
         <section className={`${cardStyles} min-w-0`}>
           <header className="flex items-center justify-between gap-3 border-b border-line px-5 py-4 sm:px-6">
             <h2 className="text-base font-semibold">
-              Holdings{" "}
+              Holdings you entered{" "}
               <span className="font-normal text-ink-subtle">({portfolio.holdings.length})</span>
             </h2>
             <DataBadge kind="input" />
