@@ -126,16 +126,16 @@ See [market-data.md](market-data.md) for methodology, freshness rules and limita
 
 `MarketDataProvider` (`app/market_data/providers/base.py`) is the only contract between the sync and a vendor. Providers return provider-neutral records (`app/market_data/records.py`). Valuation, the schema, the API and the frontend never see a provider's response format, so replacing Indian API means adding one adapter and registering it.
 
-## Deployment state (Milestone 3A)
+## Deployment state
 
-| Connection | Local development | Production (Vercel) |
-|---|---|---|
-| Browser → Next.js | Yes | Yes |
-| Next.js → FastAPI | Yes (`API_BASE_URL` defaults to `http://127.0.0.1:8000` in development) | **Not connected.** No backend is deployed |
-| FastAPI → PostgreSQL | Yes (local PostgreSQL 16) | Not deployed |
-| Sync → provider | Yes, when `INDIAN_API_KEY` is set in `backend/.env` | Not deployed; needs a scheduled job and a secret store |
+| Connection | Local development | Production today (Vercel) | Prepared production design ([deployment.md](deployment.md)) |
+|---|---|---|---|
+| Browser → Next.js | Yes | Yes | Vercel Hobby |
+| Next.js → FastAPI | Yes (`API_BASE_URL` defaults to `http://127.0.0.1:8000` in development) | **Not connected** | `API_BASE_URL` rewrite to a FastAPI Vercel project in `sin1`, read-only |
+| FastAPI → PostgreSQL | Local PostgreSQL 16 | Not deployed | Supabase transaction pooler, `DATABASE_POOL_MODE=transaction` |
+| Sync → provider | When `INDIAN_API_KEY` is set in `backend/.env` | Not deployed | GitHub Actions on weekdays at 21:30 IST over the Supabase session pooler |
 
-In production the portfolio pages show that storage is unavailable; the valuation panel shows that valuation is unavailable. The local database is never exposed.
+Until then, the live portfolio pages show that storage is unavailable, and the valuation panel shows that valuation is unavailable. The local database is never exposed.
 
 ## Security notes
 
@@ -145,7 +145,9 @@ In production the portfolio pages show that storage is unavailable; the valuatio
 - Provider responses are size-limited and parsed as data; nothing is executed.
 - Errors use a fixed JSON shape; unexpected errors return a generic 500 and are logged server-side only.
 - CSV uploads are parsed in memory, limited to 1 MB and never written to disk.
-- There is no authentication yet; this is a demonstration MVP.
+- There is no authentication yet; this is a demonstration MVP. With `APP_ENV=production`, `ReadOnlyApiMiddleware` rejects every non-GET request with `403 read_only_demo` before the body is read, `/docs` and the OpenAPI schema are disabled, and CORS accepts only explicit `https://` origins.
+- Row-level security is enabled on every table (migration `20260915_0003`), so a hosted database's REST Data API cannot read or write application tables; the application connects as the table owner and is unaffected.
+- The market-data CLI reports database errors by type only, because scheduled-job logs of a public repository are public.
 
 ## Backend layout
 

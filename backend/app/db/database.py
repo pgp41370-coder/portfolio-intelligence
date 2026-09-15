@@ -10,6 +10,7 @@ from functools import lru_cache
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.core.config import Settings
 
@@ -34,13 +35,18 @@ def normalize_database_url(url: str) -> str:
 
 
 @lru_cache(maxsize=4)
-def _create_engine(url: str) -> Engine:
+def _create_engine(url: str, pool_mode: str = "session") -> Engine:
+    if pool_mode == "transaction":
+        # A transaction-mode pooler (e.g. Supabase port 6543) hands each transaction to any server
+        # connection, so psycopg's prepared statements cannot be reused and connection pooling is
+        # left to the pooler. Each checkout opens a connection to the pooler, not to PostgreSQL.
+        return create_engine(url, poolclass=NullPool, connect_args={"connect_timeout": 5, "prepare_threshold": None})
     return create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
 
 
 @lru_cache(maxsize=4)
-def _create_session_factory(url: str) -> sessionmaker[Session]:
-    return sessionmaker(bind=_create_engine(url), expire_on_commit=False)
+def _create_session_factory(url: str, pool_mode: str = "session") -> sessionmaker[Session]:
+    return sessionmaker(bind=_create_engine(url, pool_mode), expire_on_commit=False)
 
 
 def _database_url(settings: Settings) -> str | None:
@@ -51,12 +57,12 @@ def _database_url(settings: Settings) -> str | None:
 
 def get_engine(settings: Settings) -> Engine | None:
     url = _database_url(settings)
-    return None if url is None else _create_engine(url)
+    return None if url is None else _create_engine(url, settings.database_pool_mode)
 
 
 def get_session_factory(settings: Settings) -> sessionmaker[Session] | None:
     url = _database_url(settings)
-    return None if url is None else _create_session_factory(url)
+    return None if url is None else _create_session_factory(url, settings.database_pool_mode)
 
 
 def check_database(settings: Settings) -> DatabaseStatus:

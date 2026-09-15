@@ -7,8 +7,11 @@ Run from the backend directory:
     uv run python -m app.market_data.cli sync-prices [--portfolio-id UUID] [--force]
     uv run python -m app.market_data.cli status
 
-Exit codes: 0 success, 1 failed or partial, 2 configuration error,
-3 stopped by rate limit or request budget, 4 another sync is running.
+Exit codes: 0 success, 1 failed or partial (including database errors), 2 configuration
+error, 3 stopped by rate limit or request budget, 4 another sync is running.
+
+Output may appear in public CI logs, so database errors are reported by type only: driver
+messages can contain host and user names.
 """
 
 import argparse
@@ -17,7 +20,9 @@ import logging
 import sys
 import uuid
 
-from app.core.config import get_settings
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.core.config import Settings, get_settings
 from app.db.database import get_engine, get_session_factory
 from app.market_data.calendar import now_utc
 from app.market_data.exceptions import SyncAlreadyRunningError
@@ -46,6 +51,21 @@ def main(argv: list[str] | None = None) -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     settings = get_settings()
+    if args.command != "status" and settings.database_pool_mode == "transaction":
+        print(
+            "Market-data syncs hold a session-level database lock and need a session-mode connection "
+            "(Supabase session pooler or a direct connection), not DATABASE_POOL_MODE=transaction.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        return _run(args, settings)
+    except SQLAlchemyError as exc:
+        print(f"Database error ({type(exc).__name__}); check DATABASE_URL and that the database is reachable.", file=sys.stderr)
+        return 1
+
+
+def _run(args: argparse.Namespace, settings: Settings) -> int:
     session_factory = get_session_factory(settings)
     engine = get_engine(settings)
     if session_factory is None or engine is None:

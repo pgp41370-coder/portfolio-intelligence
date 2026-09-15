@@ -135,8 +135,10 @@ Backend (`backend/.env` or the environment):
 | Variable | Required | Description |
 |---|---|---|
 | `DATABASE_URL` | For storage | PostgreSQL connection string, e.g. `postgresql+psycopg://USER:PASSWORD@localhost:5432/portfolio_intelligence`. Plain `postgresql://` URLs are converted to the psycopg driver automatically. Without it, portfolio endpoints return `503 database_not_configured`. |
-| `APP_ENV` | No | `development`, `test` or `production`. Defaults to `development`. |
-| `CORS_ALLOWED_ORIGINS` | No | JSON list of browser origins allowed to call the API directly. Defaults to `["http://localhost:3000"]`. |
+| `DATABASE_POOL_MODE` | No | `session` (default: local PostgreSQL, migrations, market-data sync) or `transaction` (a transaction-mode pooler such as Supabase port 6543 for the deployed API; disables client-side pooling and prepared statements). |
+| `APP_ENV` | No | `development`, `test` or `production`. Defaults to `development`. `production` makes the API read-only, disables `/docs` and requires explicit `https://` CORS origins. |
+| `CORS_ALLOWED_ORIGINS` | No | JSON list of browser origins allowed to call the API directly. Defaults to `["http://localhost:3000"]` in development and test, and to none in production. |
+| `ENABLE_WRITE_API` | No | Enables portfolio, holding and CSV write endpoints. Defaults to on, except in production. |
 | `INDIAN_API_KEY` | For price sync | Indian API key. **Backend only**; never exposed to the frontend or committed. Without it the app runs and valuation uses already-stored prices. |
 | `MARKET_DATA_MONTHLY_REQUEST_BUDGET` | No | Maximum metered provider requests per IST calendar month. Default `450`, maximum `500`. |
 | `MARKET_DATA_BACKFILL_PERIOD` | No | Initial price history period: `1m`, `6m` or `1yr` (default). |
@@ -458,7 +460,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ## Current limitations
 
-- **The live site has no backend or database.** Portfolio pages on Vercel explain that storage and valuation are unavailable. The complete flow works locally. Deploying the API, the database (Supabase) and a scheduled sync is a separate, planned step.
+- **The live site has no backend or database.** Portfolio pages on Vercel explain that storage and valuation are unavailable. The complete flow works locally. Deploying the API, the database (Supabase) and a scheduled sync as a read-only demo is prepared but not done; see [docs/deployment.md](docs/deployment.md).
 - **Real provider validated locally, on a small sample.** On 15 Sep 2026, NSE end-of-day closes for RELIANCE, TCS, INFY, HDFCBANK and M&M matched NSE's official figures to the paisa, and one year of history was daily. Whether the provider adjusts history for corporate actions could not be established.
 - **End-of-day, NSE only.** Not real-time. BSE-only securities cannot be valued. ISIN is not populated.
 - **Not adjusted for corporate actions and not a total return.** Dividends, taxes and charges are excluded; large moves are flagged but not corrected.

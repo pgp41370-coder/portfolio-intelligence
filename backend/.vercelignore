@@ -1,0 +1,13 @@
+# Never upload local secrets. The settings loader reads backend/.env when the file exists, so
+# an uploaded .env could put a local database URL or the provider key into the deployed API.
+# Production configuration comes only from Vercel environment variables.
+.env
+.env.*
+!.env.example
+
+# Local tooling and files the API does not need at runtime
+.venv/
+.pytest_cache/
+__pycache__/
+.DS_Store
+tests/

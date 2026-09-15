@@ -66,6 +66,22 @@ Displayed weights sum to 100.00%          ✅
 Production deployment                     ⛔  not started (write protection + rate limiting required first)
 ```
 
+```
+MILESTONE 3P: PRODUCTION DEPLOYMENT PREPARATION (prepared, not deployed)
+
+Read-only public API (production)         ✅  every non-GET request -> 403 before the body is read
+Production CORS / docs                    ✅  explicit https origins only; /docs disabled
+Supabase transaction pooler support       ✅  NullPool, prepared statements disabled
+Sync + migrations need session pooler     ✅  enforced
+Row-level security on all tables          ✅  migration 20260915_0003
+Vercel backend config                     ✅  sin1, .vercelignore keeps .env out of uploads
+GitHub Actions scheduled sync             ✅  workflow file prepared, not yet on GitHub
+Rate limiting                             ✅  plan: Vercel WAF rules (dashboard, at deploy time)
+Supabase project + real migration         ✅  16 Sep 2026: Singapore, head 20260915_0003, RLS verified, no drift
+Demo portfolio                            ⛔  awaiting approval
+Deployment                                ⛔  awaiting approval
+```
+
 ## Milestone 3A details
 
 | Item | Result |

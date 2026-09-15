@@ -24,6 +24,11 @@ def _database_url() -> str:
     url = config.attributes.get("database_url")
     if url is None:
         settings = Settings()
+        if settings.database_pool_mode == "transaction":
+            raise RuntimeError(
+                "Run migrations over a session-mode connection (Supabase session pooler or a direct "
+                "connection), not DATABASE_POOL_MODE=transaction."
+            )
         if settings.database_url is None:
             raise RuntimeError(
                 "DATABASE_URL is not set. Copy backend/.env.example to backend/.env or export DATABASE_URL."

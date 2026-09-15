@@ -1,8 +1,30 @@
-"""ASGI middleware that rejects oversized uploads before the request body is read."""
+"""ASGI middleware that rejects writes and oversized uploads before the request body is read."""
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.core.errors import error_response
+
+_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+class ReadOnlyApiMiddleware:
+    """Reject every request that could change data, for a read-only public deployment.
+
+    Any method other than GET, HEAD or OPTIONS receives 403 before routing and before the
+    body is read, so no upload is parsed and no database work is done. It covers every
+    current and future write endpoint rather than relying on a list of routes.
+    """
+
+    def __init__(self, app: ASGIApp, *, message: str) -> None:
+        self.app = app
+        self.message = message
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["method"] not in _READ_METHODS:
+            response = error_response(403, "read_only_demo", self.message)
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 class UploadSizeLimitMiddleware:

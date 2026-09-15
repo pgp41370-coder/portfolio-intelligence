@@ -1,0 +1,90 @@
+# Scheduled NSE end-of-day market-data sync for the production database.
+#
+# Weekdays at 21:30 IST (16:00 UTC; IST has no daylight saving), after the 18:00 IST
+# end-of-day availability cut-off. The security list (not metered) is refreshed on Mondays;
+# prices every weekday. On NSE holidays the sync finds nothing to request.
+#
+# Repository secrets (Settings -> Secrets and variables -> Actions):
+#   DATABASE_URL    Supabase SESSION pooler URL (port 5432). Never the transaction pooler:
+#                   the sync holds a session-level advisory lock.
+#   INDIAN_API_KEY  Indian API key.
+#
+# Logs of a public repository are public. The CLI never prints credentials and reports
+# database errors by type only; GitHub also masks secret values.
+
+name: Market data sync
+
+on:
+  schedule:
+    - cron: "0 16 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      sync_listings:
+        description: Refresh the security list before syncing prices
+        type: boolean
+        default: false
+      dry_run:
+        description: Plan the price sync without calling the provider
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One sync at a time; a queued run waits instead of cancelling the running one.
+concurrency:
+  group: market-data-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      APP_ENV: production
+      DATABASE_POOL_MODE: session
+      MARKET_DATA_MONTHLY_REQUEST_BUDGET: "450"
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      INDIAN_API_KEY: ${{ secrets.INDIAN_API_KEY }}
+      EVENT_NAME: ${{ github.event_name }}
+      SYNC_LISTINGS: ${{ inputs.sync_listings }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      - name: Install runtime dependencies
+        run: uv sync --frozen --no-dev
+
+      - name: Check that secrets are configured
+        run: |
+          missing=0
+          if [ -z "$DATABASE_URL" ]; then echo "::error::The DATABASE_URL secret is not set."; missing=1; fi
+          if [ -z "$INDIAN_API_KEY" ]; then echo "::error::The INDIAN_API_KEY secret is not set."; missing=1; fi
+          exit "$missing"
+
+      - name: Sync security list (Mondays, or when requested)
+        run: |
+          if [ "$EVENT_NAME" = "schedule" ] && [ "$(TZ=Asia/Kolkata date +%u)" != "1" ]; then
+            echo "Not Monday in IST: skipping the weekly security-list sync."
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$SYNC_LISTINGS" != "true" ]; then
+            echo "Security-list sync not requested."
+          else
+            uv run --frozen --no-dev python -m app.market_data.cli sync-listings
+          fi
+
+      - name: Sync NSE end-of-day prices
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            uv run --frozen --no-dev python -m app.market_data.cli sync-prices --dry-run
+          else
+            uv run --frozen --no-dev python -m app.market_data.cli sync-prices
+          fi

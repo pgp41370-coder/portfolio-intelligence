@@ -2,7 +2,7 @@
 
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import Engine, inspect
+from sqlalchemy import Engine, inspect, text
 
 from app.db.base import Base
 from app.market_data import models as market_data_models  # noqa: F401  (registers tables)
@@ -70,6 +70,21 @@ def test_market_data_constraints_exist(db_engine: Engine) -> None:
         "ck_market_data_sync_runs_status_valid",
         "ck_market_data_sync_runs_counters_non_negative",
     }
+
+
+def test_row_level_security_is_enabled_on_every_table(db_engine: Engine) -> None:
+    with db_engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class "
+                "WHERE relnamespace = 'public'::regnamespace AND relkind = 'r'"
+            )
+        ).all()
+
+    tables = {name: (enabled, forced) for name, enabled, forced in rows}
+    assert set(tables) == {"portfolios", "holdings", "listings", "daily_prices", "market_data_sync_runs", "alembic_version"}
+    # Enabled for hosted Data API roles; not forced, so the owning application role is unaffected.
+    assert all(enabled and not forced for enabled, forced in tables.values()), tables
 
 
 def test_migration_matches_models(db_engine: Engine) -> None:
