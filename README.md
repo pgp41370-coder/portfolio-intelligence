@@ -1,250 +1,153 @@
 # Portfolio Intelligence
 
-**Understand your portfolio. Measure your risk.**
+**Know what your Indian equity portfolio is actually worth — and exactly where that number came from.**
 
-Portfolio Intelligence is a portfolio analytics platform for Indian equities listed on NSE and BSE. It is being built to show investors how their holdings are allocated, where risk is concentrated and how their portfolio has performed.
+Portfolio Intelligence turns a list of holdings into a valued portfolio: every position priced at a **dated NSE end-of-day close**, with invested capital, current value, unrealized P&L, return and weights — and the price date, source and exchange shown on every figure.
 
-> **Status: Milestone 3A (market data and portfolio valuation).** Enter a portfolio manually or from CSV, store it in PostgreSQL, and value it at **dated NSE end-of-day closing prices** with unrealized P&L, return and weights. **Risk and performance analytics are not implemented yet.** See [Roadmap](#roadmap).
+| | |
+|---|---|
+| **Live application** | https://portfolio-intelligence-bice.vercel.app |
+| **Live API** | https://portfolio-intelligence-api.vercel.app |
+| **Demo portfolio** | [Open the demo](https://portfolio-intelligence-bice.vercel.app/analyze) — five NSE large caps, valued at the latest completed session |
+| **Status** | Deployed demo on production infrastructure. Public deployment is **read-only** |
 
-**Live site:** https://portfolio-intelligence-bice.vercel.app. The live site shows the interface only; portfolio storage and valuation are not connected there yet (see [Current limitations](#current-limitations)). The full flow runs locally.
+```
+portfolio data  →  market data  →  valuation  →  portfolio intelligence
+ holdings you      NSE EOD closes   priced at a     allocation, risk and
+ enter or import   synced daily     dated close     performance (planned)
+```
 
-This system is a portfolio analytics and valuation tool. It does not provide personalized investment advice.
+The first three stages are built and live. The fourth is the roadmap.
+
+This is a portfolio analytics and valuation tool. It is not a broker, adviser or asset manager, and it does not provide personalized investment advice.
 
 ---
 
 ## Contents
 
-1. [What Portfolio Intelligence is](#what-portfolio-intelligence-is)
-2. [Problem being solved](#problem-being-solved)
-3. [Current functionality](#current-functionality)
-4. [Technology stack](#technology-stack)
-5. [Local setup](#5-local-setup)
-6. [Environment variables](#environment-variables)
-7. [Running the app](#running-the-app)
-8. [Entering a portfolio manually](#entering-a-portfolio-manually)
-9. [Importing a portfolio from CSV](#importing-a-portfolio-from-csv)
-10. [Market data and valuation](#market-data-and-valuation)
-11. [API endpoints](#api-endpoints)
-12. [Database model](#database-model)
-13. [Validation rules](#validation-rules)
-14. [Running the tests](#running-the-tests)
-15. [Project architecture](#project-architecture)
-16. [Current limitations](#current-limitations)
-17. [Roadmap](#roadmap)
-18. [Future work](#future-work)
+1. [Why it exists](#why-it-exists)
+2. [What it does today](#what-it-does-today)
+3. [Architecture](#architecture)
+4. [Market data](#market-data)
+5. [Market-data sync](#market-data-sync)
+6. [Production hardening](#production-hardening)
+7. [API endpoints](#api-endpoints)
+8. [Database model](#database-model)
+9. [Validation rules and CSV format](#validation-rules-and-csv-format)
+10. [Local development](#local-development)
+11. [Environment variables](#environment-variables)
+12. [Tests and checks](#tests-and-checks)
+13. [Limitations and non-goals](#limitations-and-non-goals)
+14. [Project status](#project-status)
 
 ---
 
-## What Portfolio Intelligence is
+## Why it exists
 
-A web application that takes an investor's equity holdings and, in later milestones, turns them into clear, standard portfolio analytics: allocation, concentration, risk and performance. It focuses on the Indian market (NSE and BSE, INR).
+Retail investors in Indian equities hold stocks across several brokers and apps. Broker dashboards show a price and a profit figure, but rarely say *which* price, *from when*, or *from where* — and they quietly mix positions they can price with ones they cannot.
 
-## Problem being solved
+Portfolio Intelligence takes the opposite approach, because a valuation you cannot audit is not worth much:
 
-Retail investors in Indian equities often hold stocks across several brokers and apps. Broker dashboards show prices and profit or loss, but rarely answer the questions that matter for managing a portfolio:
+- **Every number is sourced.** Each price carries its trade date, exchange and provider, and the basis is stated: an end-of-day close, never a live quote.
+- **Staleness is visible.** A holding is VALUED, STALE or UNPRICED against the latest *completed* NSE session, judged by an exchange calendar rather than a 24-hour rule.
+- **Missing data is never disguised.** An unpriced holding is reported as unpriced — excluded from current value, P&L, return and weights, still counted in invested capital, and never shown as ₹0.
 
-- Is too much of my money in one stock or sector?
-- How volatile is my portfolio, and how badly could it fall?
-- Has my portfolio actually done better than simply holding the market?
+That discipline is the foundation. Allocation, concentration and risk analytics only mean something once the valuation underneath them is trustworthy.
 
-Portfolio Intelligence aims to answer these with transparent, well-established financial measures. The first step, built in this milestone, is capturing the portfolio accurately.
+## What it does today
 
-## Current functionality
+### ✅ Implemented and live
 
-| Area | Implemented |
+| Capability | Detail |
 |---|---|
-| Portfolio input | Manual entry (add and remove holdings, review, save) and CSV import (upload, validate every row, review, save) |
-| Storage | Portfolios and holdings stored in PostgreSQL through a service layer; schema managed by Alembic migrations |
-| Retrieval and display | Saved portfolios list; portfolio page with holdings table and total invested capital; remove a holding from a saved portfolio |
-| Calculation | **Total invested capital** = Σ (quantity × average buy price). Exact decimal arithmetic, based only on user input |
-| Market data | Security master from Indian API; dated NSE end-of-day closing prices ingested by a rate-limited, budget-protected sync CLI; every sync recorded |
-| Valuation | Per holding: EOD price and date, market value, unrealized P&L, return and weight. Portfolio: current value, P&L and return. Each holding is VALUED, STALE or UNPRICED; missing prices are never shown as zero |
-| Validation | Client-side checks for obvious errors; full server-side validation plus database constraints; strict validation of provider responses |
-| API | REST endpoints for portfolios, holdings, CSV import, valuation and market-data status (see [API endpoints](#api-endpoints)) |
-| Tests | Backend: Pytest suite covering rules, CSV parsing, API, persistence, migrations, provider parsing and HTTP behaviour (mocked), sync, freshness and valuation. Frontend: valuation display unit tests, ESLint, TypeScript and production build |
-| Deployment | Frontend on Vercel. The backend, database and market-data sync run locally only |
+| Portfolio capture | Manual entry (add, remove, review, save) and CSV import with per-row validation; preview a file without saving anything |
+| Storage | Portfolios and holdings in PostgreSQL through a service layer; schema managed by Alembic |
+| Invested capital | Σ (quantity × average buy price), exact `Decimal` arithmetic, from user input only |
+| Market data | Security master and dated NSE end-of-day closes synced into the database by a budget-protected job |
+| Valuation | Per holding: EOD price with trade date, market value, unrealized P&L, return, weight. Portfolio: invested, current value, P&L, return |
+| Price provenance | Trade date, source, exchange and basis ("end-of-day close, not a live price") shown on every price |
+| Freshness | VALUED / STALE / UNPRICED against the latest completed NSE session, using a configured exchange calendar |
+| Honest gaps | Unpriced holdings excluded from value, P&L, return and weights; still in invested capital; never ₹0 |
+| Weights | Displayed weights allocated after rounding so they sum to exactly 100.00% |
+| Operations | A status endpoint reporting provider configuration, request usage, last syncs and held-security freshness — without credentials |
 
-**Not implemented:** real-time prices, corporate-action adjustment, dividends and total return, realized P&L, risk metrics, benchmarks, any investment recommendation, user accounts and a production backend.
+### 🔜 Next
 
-## Technology stack
+Portfolio analytics on top of the existing valuation: allocation and concentration breakdowns, then risk and performance measures.
+
+### 🔭 Future
+
+BSE-sourced prices and ISIN-based matching, corporate-action data, user accounts, and price history charts.
+
+Planned capabilities are **not** present in the running application. Anything not in the ✅ table is not implemented — see [Limitations and non-goals](#limitations-and-non-goals).
+
+## Architecture
+
+```mermaid
+flowchart LR
+    B[Browser] --> F["Next.js on Vercel<br/>portfolio-intelligence-bice"]
+    F -- "/api/v1/* rewrite" --> A["FastAPI on Vercel, sin1<br/>portfolio-intelligence-api"]
+    A -- "transaction pooler" --> D[("PostgreSQL<br/>Supabase, ap-southeast-1")]
+    G["GitHub Actions<br/>weekdays 21:30 IST"] -- "session pooler" --> D
+    G --> P[Indian API]
+```
+
+The application is the user-facing Next.js site; the API is a separate FastAPI service. The site forwards `/api/v1/*` server-side, so the browser only ever talks to its own origin. **No web request ever calls the market-data provider** — prices are synced into the database first, and valuation reads stored data only.
 
 | Layer | Technology |
 |---|---|
 | Frontend | Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 4 |
-| Backend | Python 3.12, FastAPI, Pydantic 2 |
-| Database | PostgreSQL 16, SQLAlchemy 2 (psycopg 3), Alembic migrations |
-| Market data | Indian API (NSE end-of-day prices), httpx, Python `Decimal`, `zoneinfo` (Asia/Kolkata) |
-| Testing | Pytest (with recorded provider fixtures and mocked HTTP), Node test runner, ESLint, Next.js production build |
-| Tooling | uv (Python), npm (Node.js 24) |
-| Hosting | Vercel (frontend) |
-| Version control | Git, GitHub |
-
-Planned for later milestones: pandas, NumPy and SciPy for analytics; Recharts for charts; Supabase PostgreSQL in production.
-
-## 5. Local setup
-
-### Prerequisites
-
-- Node.js 24 and npm
-- Python 3.12 and [uv](https://docs.astral.sh/uv/)
-- PostgreSQL 16 running locally
-
-### Clone and install
-
-```bash
-git clone https://github.com/pgp41370-coder/portfolio-intelligence.git
-cd portfolio-intelligence
-```
-
-```bash
-cd backend && uv sync
-```
-
-```bash
-cd frontend && npm install
-```
-
-### Create the databases
-
-```bash
-createdb portfolio_intelligence
-```
-
-```bash
-createdb portfolio_intelligence_test
-```
-
-### Configure and migrate
-
-```bash
-cp backend/.env.example backend/.env
-```
-
-Edit `backend/.env` and set `DATABASE_URL`, then create the tables:
-
-```bash
-cd backend && uv run alembic upgrade head
-```
-
-Migrations are reproducible: `uv run alembic downgrade base` removes the tables and `uv run alembic upgrade head` recreates them on any empty PostgreSQL database. `uv run alembic upgrade head --sql` prints the SQL without running it.
-
-## Environment variables
-
-Backend (`backend/.env` or the environment):
-
-| Variable | Required | Description |
-|---|---|---|
-| `DATABASE_URL` | For storage | PostgreSQL connection string, e.g. `postgresql+psycopg://USER:PASSWORD@localhost:5432/portfolio_intelligence`. Plain `postgresql://` URLs are converted to the psycopg driver automatically. Without it, portfolio endpoints return `503 database_not_configured`. |
-| `DATABASE_POOL_MODE` | No | `session` (default: local PostgreSQL, migrations, market-data sync) or `transaction` (a transaction-mode pooler such as Supabase port 6543 for the deployed API; disables client-side pooling and prepared statements). |
-| `APP_ENV` | No | `development`, `test` or `production`. Defaults to `development`. `production` makes the API read-only, disables `/docs` and requires explicit `https://` CORS origins. |
-| `CORS_ALLOWED_ORIGINS` | No | JSON list of browser origins allowed to call the API directly. Defaults to `["http://localhost:3000"]` in development and test, and to none in production. |
-| `ENABLE_WRITE_API` | No | Enables portfolio, holding and CSV write endpoints. Defaults to on, except in production. |
-| `INDIAN_API_KEY` | For price sync | Indian API key. **Backend only**; never exposed to the frontend or committed. Without it the app runs and valuation uses already-stored prices. |
-| `MARKET_DATA_MONTHLY_REQUEST_BUDGET` | No | Maximum metered provider requests per IST calendar month. Default `450`, maximum `500`. |
-| `MARKET_DATA_BACKFILL_PERIOD` | No | Initial price history period: `1m`, `6m` or `1yr` (default). |
-| `NSE_TRADING_HOLIDAYS` | No | JSON list of NSE weekday trading holidays used by the price-freshness rule. Defaults to NSE's published 2026 list; setting it replaces the list. |
-| `NSE_SPECIAL_TRADING_SESSIONS` | No | JSON list of exchange-declared sessions on days that are normally closed. Defaults to `["2026-02-01"]` (Union Budget, Sunday). |
-| `TEST_DATABASE_URL` | For database tests | A separate database whose name must end in `_test`. The tests rebuild its schema. |
-
-Frontend:
-
-| Variable | Required | Description |
-|---|---|---|
-| `API_BASE_URL` | No | Where the frontend forwards `/api/v1/*` requests. Read when the app is built. Defaults to `http://127.0.0.1:8000` in development; in production builds without it, no API is connected. |
-
-Never commit `.env` files. They are listed in `.gitignore`.
-
-## Running the app
-
-Backend (from `backend/`):
-
-```bash
-uv run uvicorn app.main:app --reload
-```
-
-Frontend (from `frontend/`, in a second terminal):
-
-```bash
-npm run dev
-```
-
-Open http://localhost:3000 and choose **Analyze My Portfolio**. The frontend forwards `/api/v1/*` to the backend at http://127.0.0.1:8000, so no CORS setup is needed. Interactive API documentation is at http://localhost:8000/docs.
-
-## Entering a portfolio manually
-
-1. Go to **Analyze My Portfolio → Enter holdings manually**.
-2. Enter a **portfolio name**.
-3. For each position, enter **Stock Symbol**, **Exchange** (NSE or BSE), **Quantity** and **Average Buy Price (₹)**, then choose **Add Holding**. For example: `HDFCBANK`, `NSE`, `20`, `1650`.
-4. Repeat for every holding. Use **Remove Holding** to take one out. The running **Total Invested Capital** is shown below the list.
-5. Choose **Review Portfolio** to check everything, then **Save Portfolio**. **Cancel** leaves without saving.
-
-Nothing is stored until you save. The whole portfolio is saved in one database transaction.
-
-## Importing a portfolio from CSV
-
-1. Go to **Analyze My Portfolio → Upload a CSV file**.
-2. Enter a portfolio name and choose a `.csv` file.
-3. The file is checked immediately. Any problems are listed by row and column, and nothing is saved.
-4. If the file is valid, review the holdings and total invested capital, then choose **Save Portfolio**.
-
-The server validates the file again when saving. If any row is invalid, **nothing** is written to the database.
-
-### CSV format
-
-The first line must be this header (column names are case-insensitive and may be in any order):
+| Backend | Python 3.12, FastAPI, Pydantic 2, SQLAlchemy 2 (psycopg 3) |
+| Database | PostgreSQL (Supabase in production, PostgreSQL 16 locally), Alembic migrations |
+| Market data | Indian API, httpx, `Decimal`, `zoneinfo` (Asia/Kolkata) |
+| Scheduling | GitHub Actions (cron) |
+| Hosting | Vercel (two projects: application and API) |
+| Tooling | uv (Python), npm (Node.js 24), Pytest, Node test runner, ESLint |
 
 ```
-symbol,exchange,quantity,average_buy_price
+portfolio-intelligence/
+  frontend/   Next.js application
+  backend/    FastAPI application, market-data sync, Alembic migrations
+  docs/       Architecture, market-data methodology, deployment runbook
+  .github/    Scheduled market-data sync workflow
 ```
 
-| Column | Content |
-|---|---|
-| `symbol` | NSE or BSE symbol, e.g. `HDFCBANK`, `M&M`, `BAJAJ-AUTO` or a BSE scrip code such as `500180` |
-| `exchange` | `NSE` or `BSE` |
-| `quantity` | Whole number of shares, greater than 0 |
-| `average_buy_price` | Price per share in rupees, greater than 0, up to 4 decimal places |
+Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/deployment.md](docs/deployment.md).
 
-### Example CSV
+## Market data
 
-```csv
-symbol,exchange,quantity,average_buy_price
-HDFCBANK,NSE,20,1650
-TCS,NSE,10,3200
-RELIANCE,NSE,15,1400
-```
+Full methodology, trading calendar and limitations: [docs/market-data.md](docs/market-data.md).
 
-A copy is available at [`frontend/public/sample-portfolio.csv`](frontend/public/sample-portfolio.csv) and from the import page.
-
-### What is rejected
-
-- Missing, extra, blank or duplicated header columns
-- Rows with too few or too many values, and malformed CSV (for example an unclosed quote)
-- Blank values, non-numeric values (including commas like `1,000` or `₹`), zero or negative values, fractional quantities
-- Exchanges other than NSE or BSE
-- **Duplicate holdings**: the same symbol and exchange on more than one row. Duplicates are never merged; the row is identified so you can correct the file.
-- Files that are not `.csv`, larger than 1 MB, not UTF-8 text, empty, or with more than 500 holdings
-
-## Market data and valuation
-
-Portfolios are valued at the **latest available dated NSE end-of-day closing price**, never a live price. Full methodology, freshness rules and limitations: [docs/market-data.md](docs/market-data.md).
+- **Provider:** Indian API is the V1 provider, reached only through a `MarketDataProvider` interface returning provider-neutral records — replacing it means adding one adapter. Valuation, the schema, the API and the frontend never see a vendor's response format.
+- **NSE-first, end of day.** The only valuation price is the latest stored **dated NSE closing price**. Live, delayed and "current price" fields are never used. This is **not** real-time data.
+- **Synced, not fetched per request.** A valuation request performs database reads only.
+- **BSE:** a BSE holding of a security that also trades on NSE is valued at that security's **NSE** close and labelled as such. **BSE-only securities cannot be priced** and are reported as unpriced. No BSE price feed is implemented.
+- **Adjustment:** whether provider history is adjusted for splits, bonuses or dividends **could not be established** from the provider's response or documentation, so the application claims neither. Prices are used as reported, a close-to-close move of 35% or more is flagged as a possible corporate action, and returns exclude dividends.
+- **Freshness:** a session's close is expected from 18:00 IST that day; before then the previous session applies. Sessions come from a configured NSE calendar — weekdays, minus trading holidays, plus exchange-declared special sessions. Only completed session closes are stored: a bar for the current session before the cut-off, a future date or a non-session day is ignored.
+- **Validation:** a provider response must contain exactly one NSE-labelled daily price series with valid dates and positive plain-decimal prices, or nothing from it is stored.
 
 | Value | Definition |
 |---|---|
 | Market value | quantity × NSE end-of-day close |
 | Unrealized P&L | market value − quantity × average buy price |
 | Return | unrealized P&L ÷ invested value (portfolio: total P&L ÷ invested value of priced holdings) |
-| Weight | market value ÷ current value of priced holdings (displayed weights are allocated after rounding so they sum to exactly 100.00%) |
+| Weight | market value ÷ current value of priced holdings |
 
-- **VALUED:** priced at the close of the latest expected NSE session (after 18:00 IST on a session day, that day; otherwise the previous session). Sessions follow the configured NSE calendar: weekdays, minus trading holidays, plus special sessions such as the Sunday 1 Feb 2026 Budget session.
-- **Only completed session closes are stored:** a bar for today before 18:00 IST, a future date or a non-session day is ignored by the sync.
-- **STALE:** priced at an older close; the date is always shown.
-- **UNPRICED:** no NSE listing (e.g. BSE-only), unknown symbol or no stored price. Excluded from current value, P&L, return and weights; still included in total invested. Never shown as ₹0.
-- BSE holdings of securities that also trade on NSE are valued at the NSE close, and labelled as such.
-- A close-to-close move of 35% or more is flagged as a possible split or bonus issue. Prices are not adjusted for corporate actions; returns exclude dividends.
+Money and percentages are returned as decimal strings rounded to 2 places (ROUND_HALF_UP); unavailable values are `null`.
 
-### Running the sync
+## Market-data sync
 
-Set `INDIAN_API_KEY` in `backend/.env`, then from `backend/`:
+The sync is a CLI, run by a scheduled GitHub Actions workflow in production ([`.github/workflows/market-data-sync.yml`](.github/workflows/market-data-sync.yml)) or locally by an operator. These are operator commands, not public API endpoints.
+
+| Concern | Behaviour |
+|---|---|
+| Security master | Loads the provider's security list into `listings` (unmetered); refreshed weekly on Mondays or on request |
+| Daily prices | Requests NSE end-of-day history only for **held** NSE securities lacking the latest expected session |
+| Schedule | Weekdays at 21:30 IST (`0 16 * * 1-5` UTC), after end-of-day availability |
+| Budget | A monthly metered-request budget (default 450) counted per IST month from recorded runs; the request that would exceed it is never sent |
+| Pacing and retries | At least 1.1 s between requests, bounded retries on timeouts and 5xx, immediate stop on rate limiting or authentication failure, and a stop after repeated rejected responses |
+| Concurrency | A PostgreSQL advisory lock prevents overlapping syncs, so the sync needs a session-mode connection |
+| Auditability | Every run is recorded in `market_data_sync_runs` with counters, status and details |
 
 ```bash
 uv run python -m app.market_data.cli sync-listings
@@ -262,77 +165,61 @@ uv run python -m app.market_data.cli sync-prices
 uv run python -m app.market_data.cli status
 ```
 
-`sync-listings` loads the security master (not metered). `sync-prices` fetches prices only for held NSE securities that are not up to date, at most one request per 1.1 seconds, and stops on authentication errors, HTTP 429, provider outages or when the monthly request budget is reached.
+## Production hardening
+
+| Protection | Implementation |
+|---|---|
+| Read-only public API | With `APP_ENV=production`, middleware rejects every non-GET/HEAD/OPTIONS request with `403 read_only_demo` **before the body is read** — covering create, holding changes, CSV preview and import |
+| API documentation | `/docs`, `/redoc` and `/openapi.json` are disabled in production |
+| CORS | Restricted to the production application origin; wildcard, `http://` and localhost origins are rejected in production |
+| Row-level security | Enabled on every table (migration `20260915_0003`), so a hosted database's REST data API can neither read nor write them; the application connects as the table owner |
+| Provider key | The deployed API holds **no** provider key — it never calls the provider. The key exists only as a GitHub Actions secret used by the sync |
+| Secrets | Configuration comes from environment variables; `.env` files are git-ignored and excluded from deployment uploads; credentials never appear in API responses, and database errors are reported by type only |
+| Uploads | CSV uploads are capped at 1 MB and rejected before buffering |
+| Rate limiting | Vercel Firewall rules on both projects — application `/api/v1/` at 60 requests/60 s per IP, API at 120 requests/60 s per IP |
+
+**The firewall rules currently LOG; they do not BLOCK.** Both use a log-only action so traffic patterns can be observed before enforcement is considered.
+
+There is no authentication: write access is disabled in production rather than protected by accounts.
 
 ## API endpoints
 
-All portfolio endpoints are under `/api/v1`. Amounts are returned as decimal strings (for example `"1650.00"`) so no precision is lost.
+All application endpoints are under `/api/v1`. In production only the reads are available; write endpoints return `403 read_only_demo`.
 
 | Method | Path | Purpose | Success | Errors |
 |---|---|---|---|---|
 | `GET` | `/health` | Liveness check | `200` | |
 | `GET` | `/health/db` | Database connectivity check | `200` | `503` |
 | `GET` | `/api/v1` | API name, version and status | `200` | |
-| `POST` | `/api/v1/portfolios` | Create a portfolio, optionally with its holdings | `201` | `422`, `503` |
 | `GET` | `/api/v1/portfolios` | List portfolios with holding count and invested capital | `200` | `503` |
-| `GET` | `/api/v1/portfolios/{portfolio_id}` | Retrieve one portfolio with its holdings | `200` | `404`, `422` |
-| `POST` | `/api/v1/portfolios/{portfolio_id}/holdings` | Add one holding | `201` | `404`, `409` duplicate, `422` |
-| `DELETE` | `/api/v1/portfolios/{portfolio_id}/holdings/{holding_id}` | Delete one holding | `204` | `404` |
-| `POST` | `/api/v1/portfolios/csv-preview` | Validate a CSV file (multipart `file`). Saves nothing | `200` | `413`, `415` |
-| `POST` | `/api/v1/portfolios/csv-import` | Create a portfolio from a CSV file (multipart `name`, `file`) | `201` | `413`, `415`, `422` |
+| `GET` | `/api/v1/portfolios/{portfolio_id}` | One portfolio with its holdings | `200` | `404`, `422` |
 | `GET` | `/api/v1/portfolios/{portfolio_id}/valuation` | Value a portfolio at stored NSE end-of-day prices (never calls the provider) | `200` | `404`, `422`, `503` |
 | `GET` | `/api/v1/market-data/status` | Provider, configuration flag, request usage, last syncs, latest trade date, held-security freshness. Never returns credentials | `200` | `503` |
+| `POST` | `/api/v1/portfolios` | Create a portfolio, optionally with holdings | `201` | `403` in production, `422`, `503` |
+| `POST` | `/api/v1/portfolios/{portfolio_id}/holdings` | Add one holding | `201` | `403` in production, `404`, `409`, `422` |
+| `DELETE` | `/api/v1/portfolios/{portfolio_id}/holdings/{holding_id}` | Delete one holding | `204` | `403` in production, `404` |
+| `POST` | `/api/v1/portfolios/csv-preview` | Validate a CSV file (multipart `file`); saves nothing | `200` | `403` in production, `413`, `415` |
+| `POST` | `/api/v1/portfolios/csv-import` | Create a portfolio from a CSV file (multipart `name`, `file`) | `201` | `403` in production, `413`, `415`, `422` |
 
 Valuation response (abridged):
 
 ```json
 {
-  "valued_at": "2026-09-14T13:00:00Z",
-  "market_data_configured": true,
-  "freshness": {"expected_session_date": "2026-09-14", "latest_price_date": "2026-09-14", "valued_count": 1, "stale_count": 0, "unpriced_count": 0},
-  "totals": {"total_invested_value": "24000.00", "priced_invested_value": "24000.00", "total_market_value": "26500.00", "total_unrealized_pnl": "2500.00", "total_unrealized_return_pct": "10.42", "is_complete": true},
+  "valued_at": "2026-09-16T00:06:23Z",
+  "market_data_configured": false,
+  "freshness": {"expected_session_date": "2026-09-15", "latest_price_date": "2026-09-15", "valued_count": 5, "stale_count": 0, "unpriced_count": 0},
+  "totals": {"total_invested_value": "83000.00", "priced_invested_value": "83000.00", "total_market_value": "85881.50", "total_unrealized_pnl": "2881.50", "total_unrealized_return_pct": "3.47", "is_complete": true},
   "holdings": [
-    {"symbol": "RELIANCE", "exchange": "NSE", "quantity": 10, "average_buy_price": "2400.00", "status": "VALUED", "unpriced_reason": null,
-     "price": {"close_price": "2650.00", "trade_date": "2026-09-14", "exchange": "NSE", "source": "indian_api", "source_name": "Indian API", "fetched_at": "…"},
-     "invested_value": "24000.00", "market_value": "26500.00", "unrealized_pnl": "2500.00", "unrealized_return_pct": "10.42", "weight_pct": "100.00", "warnings": []}
+    {"symbol": "RELIANCE", "exchange": "NSE", "quantity": 10, "average_buy_price": "1200.00", "status": "VALUED", "unpriced_reason": null,
+     "price": {"close_price": "1235.30", "trade_date": "2026-09-15", "exchange": "NSE", "source": "indian_api", "source_name": "Indian API", "fetched_at": "…"},
+     "invested_value": "12000.00", "market_value": "12353.00", "unrealized_pnl": "353.00", "unrealized_return_pct": "2.94", "weight_pct": "14.38", "warnings": []}
   ]
 }
 ```
 
-Money and percentages are decimal strings rounded to 2 places (ROUND_HALF_UP); unavailable values are `null`.
+`market_data_configured` is `false` on the deployed API by design: it holds no provider key and reads prices the sync has already stored.
 
-Create a portfolio:
-
-```http
-POST /api/v1/portfolios
-Content-Type: application/json
-
-{
-  "name": "Long-term equity",
-  "holdings": [
-    {"symbol": "HDFCBANK", "exchange": "NSE", "quantity": 20, "average_buy_price": "1650"},
-    {"symbol": "TCS", "exchange": "NSE", "quantity": 10, "average_buy_price": "3200"}
-  ]
-}
-```
-
-Response `201`:
-
-```json
-{
-  "id": "0c3f…",
-  "name": "Long-term equity",
-  "created_at": "2026-09-15T05:10:00Z",
-  "updated_at": "2026-09-15T05:10:00Z",
-  "holdings": [
-    {"id": "…", "symbol": "HDFCBANK", "exchange": "NSE", "quantity": 20, "average_buy_price": "1650.00", "created_at": "…", "updated_at": "…"},
-    {"id": "…", "symbol": "TCS", "exchange": "NSE", "quantity": 10, "average_buy_price": "3200.00", "created_at": "…", "updated_at": "…"}
-  ],
-  "total_invested_capital": "65000.00"
-}
-```
-
-Every error has the same shape, with `details` for validation problems:
+Errors share one shape, with `details` for validation problems:
 
 ```json
 {"error": {"code": "duplicate_holding", "message": "HDFCBANK on NSE is already in this portfolio."}}
@@ -343,91 +230,135 @@ Every error has the same shape, with `details` for validation problems:
 ```mermaid
 erDiagram
     PORTFOLIOS ||--o{ HOLDINGS : contains
-    PORTFOLIOS {
-        uuid id PK
-        varchar name
-        timestamptz created_at
-        timestamptz updated_at
-    }
-    HOLDINGS {
-        uuid id PK
-        uuid portfolio_id FK
-        varchar symbol
-        varchar exchange
-        bigint quantity
-        numeric average_buy_price
-        timestamptz created_at
-        timestamptz updated_at
-    }
+    LISTINGS ||--o{ DAILY_PRICES : "has closes"
+    MARKET_DATA_SYNC_RUNS ||--o{ DAILY_PRICES : "stored by"
+    HOLDINGS }o..o| LISTINGS : "matched by NSE symbol or BSE code"
 ```
-
-**portfolios**
-
-| Column | Type | Constraints |
-|---|---|---|
-| `id` | `UUID` | Primary key |
-| `name` | `VARCHAR(100)` | Not null; must not be blank |
-| `created_at`, `updated_at` | `TIMESTAMPTZ` | Not null; default `now()` |
-
-**holdings**
-
-| Column | Type | Constraints |
-|---|---|---|
-| `id` | `UUID` | Primary key |
-| `portfolio_id` | `UUID` | Foreign key to `portfolios.id`, `ON DELETE CASCADE` |
-| `symbol` | `VARCHAR(20)` | Uppercase letters, digits, `&` and `-` (check constraint) |
-| `exchange` | `VARCHAR(3)` | `NSE` or `BSE` (check constraint) |
-| `quantity` | `BIGINT` | Greater than 0 |
-| `average_buy_price` | `NUMERIC(14,4)` | Greater than 0 |
-| `created_at`, `updated_at` | `TIMESTAMPTZ` | Not null; default `now()` |
-
-A holding is unique per portfolio, symbol and exchange (`uq_holdings_portfolio_id_symbol_exchange`).
-
-**Market-data tables** (migration `20260915_0002`, additive; portfolios and holdings are unchanged):
 
 | Table | Purpose | Key constraints |
 |---|---|---|
+| `portfolios` | Portfolio name and timestamps | Name not blank |
+| `holdings` | Symbol, exchange, quantity, average buy price | FK to `portfolios` `ON DELETE CASCADE`; unique `(portfolio_id, symbol, exchange)`; quantity and price > 0; `NSE`/`BSE`; symbol format |
 | `listings` | Security master: provider ID, name, NSE symbol, BSE scrip code, ISIN (nullable), active flag | Unique `(provider, provider_security_id)`, `(provider, nse_symbol)`, `(provider, bse_code)`; format checks |
 | `daily_prices` | One reported close per security, exchange and `trade_date` (`DATE`): `close_price NUMERIC(18,4)`, volume, source, `fetched_at`, sync run | Unique `(listing_id, exchange, trade_date)`; close > 0 |
 | `market_data_sync_runs` | Every sync: provider, kind, status, requests made, records attempted/inserted/updated, failures, error summary, details | Status and kind checks; non-negative counters |
+| `alembic_version` | Migration state managed by Alembic | Current head: `20260915_0003` |
 
-Holdings are matched to listings at read time (NSE symbol or BSE scrip code), not by foreign key.
+Holdings are matched to listings **at read time** by NSE symbol or BSE scrip code, not by foreign key, so market data can be added without touching user data.
 
-**Nothing derived is stored.** Market value, invested value, profit or loss, returns and weights are always calculated from stored holdings and stored prices.
+**Nothing derived is stored.** Market value, invested value, P&L, returns and weights are calculated on every request from stored holdings and stored prices.
 
-## Validation rules
+## Validation rules and CSV format
 
-The same rules apply to manual entry, the JSON API and CSV import. The browser catches obvious mistakes first; the API validates everything again; the database constraints are a final safeguard.
+The same rules apply to manual entry, the JSON API and CSV import: the browser catches obvious mistakes, the API validates everything again, and database constraints are the final safeguard.
 
 | Field | Rule |
 |---|---|
 | Portfolio name | Required, 1–100 characters after trimming; repeated spaces collapsed |
-| Symbol | Required, trimmed and uppercased, at most 20 characters, starts with a letter or digit, then letters, digits, `&` or `-`. Format only: symbols are **not** checked against NSE or BSE listings yet |
+| Symbol | Required, trimmed and uppercased, at most 20 characters, starts with a letter or digit, then letters, digits, `&` or `-`. Format only: symbols are **not** checked against exchange listings at entry |
 | Exchange | `NSE` or `BSE` (case-insensitive) |
 | Quantity | Whole number, greater than 0, at most 1,000,000,000 |
-| Average buy price | Number greater than 0, at most 4 decimal places, at most 9,999,999,999.9999; no commas or currency symbols |
+| Average buy price | Greater than 0, at most 4 decimal places, at most 9,999,999,999.9999; no commas or currency symbols |
 | Holdings per portfolio | At most 500; each symbol and exchange pair at most once |
 | Request body | Unknown fields are rejected |
 
-## Running the tests
+CSV header (case-insensitive, any order), with a sample at [`frontend/public/sample-portfolio.csv`](frontend/public/sample-portfolio.csv):
 
-Backend (from `backend/`). Tests that need a database run only when `TEST_DATABASE_URL` points at a database whose name ends in `_test`:
+```csv
+symbol,exchange,quantity,average_buy_price
+HDFCBANK,NSE,20,1650
+TCS,NSE,10,3200
+RELIANCE,NSE,15,1400
+```
+
+Rejected: bad or duplicated headers, malformed rows, blank or non-numeric values, zero or negative values, fractional quantities, exchanges other than NSE/BSE, duplicate symbol-and-exchange rows (never merged), non-`.csv` files, files over 1 MB or not UTF-8, and more than 500 holdings.
+
+## Local development
+
+Writes are enabled by default outside production, so the full flow — manual entry, CSV import, valuation — works locally.
+
+**Prerequisites:** Node.js 24 and npm, Python 3.12 and [uv](https://docs.astral.sh/uv/), PostgreSQL 16.
+
+```bash
+git clone https://github.com/pgp41370-coder/portfolio-intelligence.git
+cd portfolio-intelligence
+```
+
+```bash
+cd backend && uv sync
+```
+
+```bash
+cd frontend && npm install
+```
+
+```bash
+createdb portfolio_intelligence && createdb portfolio_intelligence_test
+```
+
+```bash
+cp backend/.env.example backend/.env
+```
+
+Set `DATABASE_URL` in `backend/.env` — placeholders only, never real credentials — then create the tables:
+
+```bash
+cd backend && uv run alembic upgrade head
+```
+
+Run the backend from `backend/`:
+
+```bash
+uv run uvicorn app.main:app --reload
+```
+
+And the frontend from `frontend/`, in a second terminal:
+
+```bash
+npm run dev
+```
+
+Open http://localhost:3000 and choose **Analyze My Portfolio**. The frontend forwards `/api/v1/*` to http://127.0.0.1:8000, so no CORS setup is needed. Interactive API documentation is at http://localhost:8000/docs in development.
+
+## Environment variables
+
+Use placeholders in committed files. `.env` files are git-ignored and excluded from deployment uploads.
+
+Backend (`backend/.env` or the environment):
+
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | For storage | PostgreSQL connection string, e.g. `postgresql+psycopg://USER:PASSWORD@localhost:5432/portfolio_intelligence`. Plain `postgresql://` URLs are converted to the psycopg driver. Without it, portfolio endpoints return `503 database_not_configured` |
+| `DATABASE_POOL_MODE` | No | `session` (default: local PostgreSQL, migrations, market-data sync) or `transaction` (a transaction-mode pooler for a serverless API; disables client-side pooling and prepared statements) |
+| `APP_ENV` | No | `development`, `test` or `production`. Defaults to `development`. `production` makes the API read-only, disables `/docs` and requires explicit `https://` CORS origins |
+| `CORS_ALLOWED_ORIGINS` | No | JSON list of browser origins allowed to call the API directly. Defaults to `["http://localhost:3000"]` in development and test, and to none in production |
+| `ENABLE_WRITE_API` | No | Enables write endpoints. Defaults to on, except in production |
+| `INDIAN_API_KEY` | For price sync | Indian API key. **Sync only**; never set on the deployed API, never exposed to the frontend, never committed |
+| `MARKET_DATA_MONTHLY_REQUEST_BUDGET` | No | Maximum metered provider requests per IST calendar month. Default `450`, maximum `500` |
+| `MARKET_DATA_BACKFILL_PERIOD` | No | Initial price history period: `1m`, `6m` or `1yr` (default) |
+| `NSE_TRADING_HOLIDAYS` | No | JSON list of NSE weekday trading holidays used by the freshness rule. Defaults to the published 2026 list; setting it replaces the list |
+| `NSE_SPECIAL_TRADING_SESSIONS` | No | JSON list of exchange-declared sessions on normally closed days. Defaults to `["2026-02-01"]` (Union Budget, Sunday) |
+| `TEST_DATABASE_URL` | For database tests | A separate database whose name must end in `_test`. The tests rebuild its schema |
+
+Frontend:
+
+| Variable | Required | Description |
+|---|---|---|
+| `API_BASE_URL` | No | Where the frontend forwards `/api/v1/*`. Read at **build** time. Defaults to `http://127.0.0.1:8000` in development; without it in a production build, no API is connected |
+
+## Tests and checks
+
+Backend, from `backend/`. Database tests run only when `TEST_DATABASE_URL` names a database ending in `_test`:
 
 ```bash
 TEST_DATABASE_URL=postgresql+psycopg://USER@localhost:5432/portfolio_intelligence_test uv run pytest
 ```
 
-Without `TEST_DATABASE_URL`, the database tests are skipped and the rest still run:
-
 ```bash
 uv run pytest
 ```
 
-The database tests rebuild the schema with the real Alembic migrations, check that the migrations match the ORM models, and cover portfolio creation and retrieval, holdings, deletion, validation, duplicate handling, CSV import without partial writes, constraint enforcement, total invested capital, market-data sync (idempotency, duplicates, budget, rate limits, failures, locking) and the valuation and status APIs.
-
-Automated tests **never call the real Indian API**: provider parsing uses recorded-format fixtures in `backend/tests/fixtures/indian_api/`, HTTP behaviour uses a mocked transport, and sync tests use a fake provider.
-
-Frontend (from `frontend/`):
+Frontend, from `frontend/`:
 
 ```bash
 npm test
@@ -441,60 +372,50 @@ npm run lint
 npm run build
 ```
 
-## Project architecture
+Latest verified run on this commit:
 
-```
-portfolio-intelligence/
-  frontend/   Next.js application (deployed to Vercel)
-  backend/    FastAPI application, portfolio service, Alembic migrations
-  docs/       Architecture documentation
-```
+| Check | Result |
+|---|---|
+| Backend with PostgreSQL | 360 passed |
+| Backend without a database | 253 passed, 107 skipped |
+| Frontend unit tests | 8 passed |
+| ESLint, TypeScript, production build | Clean |
 
-```
-Frontend (Next.js) → FastAPI → Portfolio / Valuation services → PostgreSQL ← Market-data sync (CLI) ← Indian API
-```
+Database tests rebuild the schema with the real migrations and assert that migrations match the ORM models. They cover portfolio creation and retrieval, holdings, deletion, validation, duplicate handling, CSV import without partial writes, market-data sync (idempotency, budget, rate limits, failures, locking, session and holiday rules), valuation arithmetic and the read-only production configuration.
 
-No web request calls the market-data provider.
+Automated tests **never call the real Indian API**: parsing uses recorded fixtures in `backend/tests/fixtures/indian_api/`, HTTP behaviour uses a mocked transport, and sync tests use a fake provider.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
+## Limitations and non-goals
 
-## Current limitations
+Deliberately **not** implemented:
 
-- **The live site has no backend or database.** Portfolio pages on Vercel explain that storage and valuation are unavailable. The complete flow works locally. Deploying the API, the database (Supabase) and a scheduled sync as a read-only demo is prepared but not done; see [docs/deployment.md](docs/deployment.md).
-- **Real provider validated locally, on a small sample.** On 15 Sep 2026, NSE end-of-day closes for RELIANCE, TCS, INFY, HDFCBANK and M&M matched NSE's official figures to the paisa, and one year of history was daily. Whether the provider adjusts history for corporate actions could not be established.
-- **End-of-day, NSE only.** Not real-time. BSE-only securities cannot be valued. ISIN is not populated.
-- **Not adjusted for corporate actions and not a total return.** Dividends, taxes and charges are excluded; large moves are flagged but not corrected.
-- **The NSE trading calendar is maintained by hand.** The 2026 holidays and special session are built in (`backend/app/market_data/nse_calendar.py`); each new year's list must be added.
-- **Free-tier provider.** About 20 held NSE securities can be kept current each month within the request budget; the provider publishes no SLA.
-- **No user accounts.** Anyone who can reach a running backend can see and change every portfolio. This is a demonstration MVP, not a production financial service.
-- Holdings cannot be edited in place; remove and add again. Portfolios cannot be renamed or deleted from the interface yet.
+- AI or automated investment recommendations, stock picking, or portfolio optimization
+- Advanced risk analytics, benchmarks and performance attribution
+- Real-time or intraday prices
+- Realized P&L, taxes and dividends, or total-return measurement
+- Automated corporate-action adjustment (large moves are flagged, not corrected)
+- BSE-sourced prices; BSE-only securities cannot be valued
+- User accounts and authentication
 
-## Roadmap
+Operational limitations:
+
+- The public deployment is read-only; visitors cannot create or import portfolios.
+- Free-tier provider: roughly 20 held NSE securities can be kept current each month within the request budget, and the provider publishes no SLA.
+- The NSE trading calendar is maintained by hand in `backend/app/market_data/nse_calendar.py`; each year's list must be added.
+- Provider prices were spot-checked against NSE's official closes for five large-cap securities on 15 September 2026 and matched to the paisa. That is a small sample, not continuous assurance.
+- ISIN is not populated; holdings cannot be edited in place; portfolios cannot be renamed or deleted from the interface.
+
+## Project status
 
 | Milestone | Scope | Status |
 |---|---|---|
 | 1. Live application skeleton | Frontend, backend, database configuration, tests, deployment | Done |
 | 2. Portfolio input and data model | Manual entry, CSV import, validation, PostgreSQL storage, portfolio display | Done |
-| 3A. Market data and valuation | Security master, NSE end-of-day prices, sync with request budget, portfolio valuation API and UI | Done (local; validated against the real provider and NSE closes) |
-| 3B. Production backend | Deploy the API, connect Supabase PostgreSQL, scheduled price sync | Planned |
+| 3A. Market data and valuation | Security master, NSE end-of-day prices, budget-protected sync, valuation API and UI | Done |
+| 3P. Production deployment | API and database in production, scheduled sync, read-only public access, hardening, rate limiting in log mode | Done |
 | 4. Analytics | Allocation, concentration, risk and performance | Planned |
 
-## Future work
-
-Ideas noted during Milestone 2 and deliberately not built, to keep the scope focused:
-
-- Edit a holding's quantity or average buy price (`PATCH`) and add holdings to a saved portfolio from the interface
-- Rename and delete portfolios from the interface
-- Show invested amount per holding
-- Verify symbols against an NSE/BSE security master
-- Import broker export formats (for example Zerodha or Groww holdings files)
-- User accounts so each investor sees only their own portfolios
-- Rate limiting and pagination for the API
-- Export a portfolio to CSV
-- BSE end-of-day prices and ISIN-based security matching
-- Corporate-action data to adjust quantities and flag affected holdings precisely
-- An NSE holiday calendar sourced from the exchange rather than configuration
-- Price history charts
+"Production" here means deployed on production infrastructure as a read-only demonstration. It is not a regulated or commercially assured financial service.
 
 ---
 
