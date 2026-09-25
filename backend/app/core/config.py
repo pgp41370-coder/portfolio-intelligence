@@ -1,6 +1,7 @@
 """Application settings, loaded from environment variables or a local .env file."""
 
 from datetime import date
+from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlsplit
@@ -9,7 +10,12 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.market_data.calendar import TradingCalendar
-from app.market_data.nse_calendar import NSE_SPECIAL_TRADING_SESSIONS, NSE_TRADING_HOLIDAYS
+from app.market_data.nse_calendar import (
+    CALENDAR_COMPLETE_FROM,
+    CALENDAR_COMPLETE_TO,
+    NSE_SPECIAL_TRADING_SESSIONS,
+    NSE_TRADING_HOLIDAYS,
+)
 
 DEVELOPMENT_CORS_ORIGINS = ("http://localhost:3000",)
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
@@ -62,6 +68,14 @@ class Settings(BaseSettings):
     nse_trading_holidays: list[date] = Field(default_factory=lambda: sorted(NSE_TRADING_HOLIDAYS))
     # Exchange-declared sessions on days that are normally closed (e.g. a Sunday Budget session).
     nse_special_trading_sessions: list[date] = Field(default_factory=lambda: sorted(NSE_SPECIAL_TRADING_SESSIONS))
+    # Annual risk-free rate as a percentage, e.g. 6.5 for 6.5%. Unset by default: without a
+    # real rate the Sharpe ratio is withheld rather than computed against an assumed one.
+    risk_free_rate_pct: Decimal | None = None
+
+    # The range the holiday lists are known to be complete for. Outside it the application says
+    # so rather than treating every weekday as a confirmed trading session.
+    nse_calendar_complete_from: date | None = CALENDAR_COMPLETE_FROM
+    nse_calendar_complete_to: date | None = CALENDAR_COMPLETE_TO
 
     @field_validator("database_url", "indian_api_key", mode="before")
     @classmethod
@@ -107,6 +121,11 @@ class Settings(BaseSettings):
         return self
 
     @property
+    def risk_free_rate(self) -> Decimal | None:
+        """The configured annual risk-free rate as a fraction, or None if unset."""
+        return self.risk_free_rate_pct / Decimal(100) if self.risk_free_rate_pct is not None else None
+
+    @property
     def market_data_configured(self) -> bool:
         return self.indian_api_key is not None
 
@@ -125,6 +144,8 @@ class Settings(BaseSettings):
         return TradingCalendar(
             holidays=frozenset(self.nse_trading_holidays),
             special_sessions=frozenset(self.nse_special_trading_sessions),
+            complete_from=self.nse_calendar_complete_from,
+            complete_to=self.nse_calendar_complete_to,
         )
 
 

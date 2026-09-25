@@ -129,7 +129,9 @@ def test_api_key_is_hidden_in_settings_repr() -> None:
 def test_default_trading_calendar_is_the_published_2026_nse_calendar() -> None:
     calendar = Settings(_env_file=None).trading_calendar
 
-    assert len(calendar.holidays) == 16
+    assert len([day for day in calendar.holidays if day.year == 2026]) == 16
+    # M4.2 added the four 2025 holidays the provider's price history confirms.
+    assert len([day for day in calendar.holidays if day.year == 2025]) == 4
     assert date(2026, 9, 14) in calendar.holidays  # Ganesh Chaturthi
     assert calendar.special_sessions == frozenset({date(2026, 2, 1)})  # Union Budget, Sunday
     assert not calendar.is_session_day(date(2026, 9, 14))

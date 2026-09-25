@@ -1,9 +1,10 @@
 """Trading-session freshness rules (no database)."""
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
+from app.core.config import Settings
 from app.market_data.calendar import (
     IST,
     WEEKDAYS_ONLY,
@@ -164,3 +165,61 @@ def test_a_holiday_is_never_expected_unless_configured_as_a_special_session() ->
 def test_a_date_cannot_be_both_a_holiday_and_a_special_session() -> None:
     with pytest.raises(ValueError):
         TradingCalendar(holidays=frozenset({date(2026, 9, 14)}), special_sessions=frozenset({date(2026, 9, 14)}))
+
+
+# --- Calendar completeness (M4.2) -------------------------------------------------------
+
+
+def test_2025_holidays_are_configured_and_are_not_session_days() -> None:
+    """The four 2025 dates no synced security has a close for."""
+    calendar = Settings(_env_file=None).trading_calendar
+
+    for day in (date(2025, 10, 2), date(2025, 10, 22), date(2025, 11, 5), date(2025, 12, 25)):
+        assert not calendar.is_session_day(day), day
+    # A normal weekday either side of them still is one.
+    assert calendar.is_session_day(date(2025, 10, 1))
+    assert calendar.is_session_day(date(2025, 12, 24))
+    # 21 Oct 2025 traded (Muhurat session), so it must not be listed as a holiday.
+    assert calendar.is_session_day(date(2025, 10, 21))
+
+
+def test_weekends_are_never_sessions_without_a_special_session() -> None:
+    calendar = Settings(_env_file=None).trading_calendar
+
+    assert not calendar.is_session_day(date(2026, 9, 12))  # Saturday
+    assert not calendar.is_session_day(date(2026, 9, 13))  # Sunday
+    assert calendar.is_session_day(date(2026, 2, 1))  # Sunday Budget session, declared
+
+
+def test_calendar_states_the_range_it_is_complete_for() -> None:
+    calendar = Settings(_env_file=None).trading_calendar
+
+    assert calendar.covers(date(2025, 9, 15)) and calendar.covers(date(2026, 12, 31))
+    assert not calendar.covers(date(2025, 9, 14))  # before the evidence starts
+    assert not calendar.covers(date(2027, 1, 4))  # NSE has published no 2027 list
+
+    assert calendar.completeness_gap(date(2025, 10, 1), date(2026, 9, 15)) is None
+    before = calendar.completeness_gap(date(2025, 1, 1), date(2026, 9, 15))
+    after = calendar.completeness_gap(date(2026, 1, 1), date(2027, 3, 1))
+    assert before and "before 15 Sep 2025" in before
+    assert after and "after 31 Dec 2026" in after
+
+
+def test_year_boundaries_are_handled() -> None:
+    calendar = Settings(_env_file=None).trading_calendar
+
+    assert not calendar.is_session_day(date(2025, 12, 25))  # Christmas, a Thursday
+    assert calendar.is_session_day(date(2025, 12, 26))  # the Friday after
+    assert calendar.is_session_day(date(2026, 1, 1))  # a Thursday NSE does not close for
+    assert calendar.is_session_day(date(2026, 12, 31))  # a Thursday, inside the covered range
+
+
+def test_expected_sessions_exclude_holidays_and_weekends() -> None:
+    calendar = Settings(_env_file=None).trading_calendar
+    days = [date(2025, 9, 29) + timedelta(days=offset) for offset in range(12)]  # Mon 29 Sep - Fri 10 Oct
+
+    sessions = [day for day in days if calendar.is_session_day(day)]
+
+    assert date(2025, 10, 2) not in sessions  # Gandhi Jayanti
+    assert date(2025, 10, 4) not in sessions and date(2025, 10, 5) not in sessions  # weekend
+    assert len(sessions) == 9  # 10 weekdays in the span, minus Gandhi Jayanti

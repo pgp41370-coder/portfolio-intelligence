@@ -82,7 +82,15 @@ def test_row_level_security_is_enabled_on_every_table(db_engine: Engine) -> None
         ).all()
 
     tables = {name: (enabled, forced) for name, enabled, forced in rows}
-    assert set(tables) == {"portfolios", "holdings", "listings", "daily_prices", "market_data_sync_runs", "alembic_version"}
+    assert set(tables) == {
+        "portfolios",
+        "holdings",
+        "transactions",
+        "listings",
+        "daily_prices",
+        "market_data_sync_runs",
+        "alembic_version",
+    }
     # Enabled for hosted Data API roles; not forced, so the owning application role is unaffected.
     assert all(enabled and not forced for enabled, forced in tables.values()), tables
 

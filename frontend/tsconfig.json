@@ -11,6 +11,9 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
+    // Lets a library import a sibling with its .ts extension, which the node test runner
+    // requires to resolve modules without the "@/" alias. noEmit is on, so nothing ships it.
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "incremental": true,
     "plugins": [

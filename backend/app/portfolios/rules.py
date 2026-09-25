@@ -92,6 +92,11 @@ def parse_average_buy_price(value: object) -> Decimal:
     return number.quantize(_PRICE_QUANTUM)
 
 
+def parse_decimal(value: object, label: str) -> Decimal:
+    """Public entry point for other domains that accept the same numeric input formats."""
+    return _to_decimal(value, label)
+
+
 def _to_decimal(value: object, label: str) -> Decimal:
     if isinstance(value, bool):
         raise ValueError(f"{label} must be a number.")

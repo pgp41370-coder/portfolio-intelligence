@@ -37,10 +37,18 @@ class PriceFreshness(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class TradingCalendar:
-    """Weekday exchange holidays, and special sessions on days that are normally closed."""
+    """Weekday exchange holidays, and special sessions on days that are normally closed.
+
+    ``complete_from`` and ``complete_to`` bound the range the holiday list is known to cover.
+    Outside it a weekday is still treated as a session - that is the only workable default -
+    but :meth:`completeness_gap` lets callers say so rather than reporting an unlisted holiday
+    as missing market data. Leaving them unset means no claim either way.
+    """
 
     holidays: frozenset[date] = frozenset()
     special_sessions: frozenset[date] = frozenset()
+    complete_from: date | None = None
+    complete_to: date | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "holidays", frozenset(self.holidays))
@@ -53,6 +61,28 @@ class TradingCalendar:
         if day in self.special_sessions:
             return True
         return day.weekday() < 5 and day not in self.holidays
+
+    def covers(self, day: date) -> bool:
+        """Whether the holiday list is known to be complete for this day."""
+        if self.complete_from is not None and day < self.complete_from:
+            return False
+        return not (self.complete_to is not None and day > self.complete_to)
+
+    def completeness_gap(self, start: date, end: date) -> str | None:
+        """A sentence naming the part of a window the calendar cannot vouch for, if any."""
+        before = self.complete_from is not None and start < self.complete_from
+        after = self.complete_to is not None and end > self.complete_to
+        if not (before or after):
+            return None
+        parts = []
+        if before:
+            parts.append(f"before {self.complete_from:%d %b %Y}")
+        if after:
+            parts.append(f"after {self.complete_to:%d %b %Y}")
+        return (
+            f"The configured NSE trading calendar is not known to be complete {' or '.join(parts)}; "
+            "exchange holidays in that part of the window may be counted as unpriced sessions."
+        )
 
 
 WEEKDAYS_ONLY = TradingCalendar()

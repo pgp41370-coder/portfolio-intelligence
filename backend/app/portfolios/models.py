@@ -45,6 +45,14 @@ class Portfolio(Base):
         passive_deletes=True,
         order_by=lambda: [Holding.symbol, Holding.exchange],
     )
+    # The ledger is optional: a portfolio without transactions keeps the M4.1 behaviour.
+    transactions: Mapped[list["object"]] = relationship(
+        "Transaction",
+        back_populates="portfolio",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by=lambda: _transaction_order(),
+    )
 
 
 class Holding(Base):
@@ -72,3 +80,10 @@ class Holding(Base):
     )
 
     portfolio: Mapped[Portfolio] = relationship(back_populates="holdings")
+
+
+def _transaction_order() -> list:
+    """Deterministic ledger order: trade date, then insertion order, then id."""
+    from app.transactions.models import Transaction
+
+    return [Transaction.trade_date, Transaction.created_at, Transaction.id]

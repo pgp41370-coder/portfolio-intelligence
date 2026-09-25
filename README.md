@@ -30,15 +30,17 @@ This is a portfolio analytics and valuation tool. It is not a broker, adviser or
 3. [Architecture](#architecture)
 4. [Market data](#market-data)
 5. [Market-data sync](#market-data-sync)
-6. [Production hardening](#production-hardening)
-7. [API endpoints](#api-endpoints)
-8. [Database model](#database-model)
-9. [Validation rules and CSV format](#validation-rules-and-csv-format)
-10. [Local development](#local-development)
-11. [Environment variables](#environment-variables)
-12. [Tests and checks](#tests-and-checks)
-13. [Limitations and non-goals](#limitations-and-non-goals)
-14. [Project status](#project-status)
+6. [Portfolio intelligence](#portfolio-intelligence)
+7. [Performance and analytics](#performance-and-analytics)
+8. [Production hardening](#production-hardening)
+9. [API endpoints](#api-endpoints)
+10. [Database model](#database-model)
+11. [Validation rules and CSV format](#validation-rules-and-csv-format)
+12. [Local development](#local-development)
+13. [Environment variables](#environment-variables)
+14. [Tests and checks](#tests-and-checks)
+15. [Limitations and non-goals](#limitations-and-non-goals)
+16. [Project status](#project-status)
 
 ---
 
@@ -69,15 +71,33 @@ That discipline is the foundation. Allocation, concentration and risk analytics 
 | Freshness | VALUED / STALE / UNPRICED against the latest completed NSE session, using a configured exchange calendar |
 | Honest gaps | Unpriced holdings excluded from value, P&L, return and weights; still in invested capital; never ₹0 |
 | Weights | Displayed weights allocated after rounding so they sum to exactly 100.00% |
+| Performance history | Value series, cumulative return, annualised volatility and maximum drawdown over a chosen window, with explicit coverage reporting |
+| Transaction ledger | Dated buys and sells per portfolio, entered in the interface or imported from CSV, validated against overselling and future dates, reconciled against the holdings on record |
+| Transaction CSV import | Upload, validate, preview, confirm — with row-level errors and an all-or-nothing import |
+| Realised and unrealised P&L | FIFO cost basis, per security and in total, with contributions and withdrawals shown apart from performance |
+| Money-weighted return | XIRR alongside the time-weighted return, as a period figure and an annualised one, withheld rather than guessed when the cash flows admit several answers |
+| Corporate-action disclosure | The whole window is scanned for price moves that may be splits, bonus issues or consolidations; the figures they affect are named, and nothing is adjusted |
+| Portfolio timeline | Every recorded transaction with the position change, portfolio value and return it produced |
+| Return attribution | Per-security contributions that sum to the portfolio's daily return, and the latest session's movers |
+| Portfolio intelligence | A deterministic explanation of the measured numbers: what drove the return, how it compares with the benchmark proxy, how much of the value change was cash flow, the risk context, and what qualifies the answer |
+| Time-weighted return | Daily flow-adjusted returns chained across the window, so money added or withdrawn is not counted as performance |
+| Benchmark comparison | NIFTY 50 via a synced index ETF proxy, rebased for comparison and labelled a proxy everywhere it appears |
+| Risk measures | Downside volatility, beta, tracking error and information ratio; Sharpe only when a risk-free rate is configured |
+| Allocation | Position weights, top-1/3/5 concentration and a Herfindahl-Hirschman index |
 | Operations | A status endpoint reporting provider configuration, request usage, last syncs and held-security freshness — without credentials |
 
 ### 🔜 Next
 
-Portfolio analytics on top of the existing valuation: allocation and concentration breakdowns, then risk and performance measures.
+Sector allocation once a classification source exists, and editing a transaction in place.
+
+### 🔭 Deliberately not built
+
+Natural-language generation over these facts. The structured explanation is the source of truth; a
+language layer on top of it would be a rendering choice, never the calculation engine.
 
 ### 🔭 Future
 
-BSE-sourced prices and ISIN-based matching, corporate-action data, user accounts, and price history charts.
+BSE-sourced prices and ISIN-based matching, corporate-action data, dividends and total return, tax-lot reporting, and user accounts.
 
 Planned capabilities are **not** present in the running application. Anything not in the ✅ table is not implemented — see [Limitations and non-goals](#limitations-and-non-goals).
 
@@ -165,6 +185,64 @@ uv run python -m app.market_data.cli sync-prices
 uv run python -m app.market_data.cli status
 ```
 
+## Portfolio intelligence
+
+A single read-only endpoint, `GET /api/v1/portfolios/{id}/intelligence`, composes the performance,
+attribution, profit-and-loss and allocation calculations into structured facts and template
+sentences.
+
+- **It explains; it does not calculate.** Every figure comes from a calculation documented
+  elsewhere in this README, and every sentence is a template filled with one of those figures.
+- **It states measurements, never judgements.** "HDFCBANK contributed −13.04 percentage points" is
+  a fact the data supports. Whether a holding is good, bad, risky or worth buying is not, so the
+  layer never says it. A test asserts that no response contains advice or forecast vocabulary.
+- **It never explains past the data.** A contribution says which security moved the portfolio, not
+  why that security moved — the application knows the first and not the second.
+- **It leads with what qualifies the answer.** Stale prices, missing sessions, an unsynced
+  benchmark and a ledger that disagrees with the holdings are reported before the figures they
+  affect, and the response is marked `limited` rather than `available`.
+- **There is no model here.** No LLM, no prediction, no scoring, no external service. The layer
+  reads stored end-of-day closes through the existing services and nothing else.
+
+Contributions are checkable rather than merely plausible: they sum to the portfolio's measured
+return by construction, and the response carries `contributions_reconcile` to say so. Because each
+day is weighed against the portfolio's size that day, a security's contribution can differ in sign
+from its own price return — the response explains this rather than letting it look like an error.
+
+**One valuation per request.** Performance, attribution, profit and loss, and the explanation all
+read a single `PerformanceContext`: the portfolio, its ledger, and one pass over it. The same pass
+serves both bases, so a card and the explanation of that card can never describe different
+sessions. Adding `?trace=true` returns the provenance of each headline figure — which calculation
+produced it, from which inputs, by which formula — for auditing; the ordinary response is
+unchanged.
+
+Two kinds of test protect the arithmetic from silent drift. **Golden tests** pin every published
+figure for a fixed portfolio whose expected values were derived independently of the application.
+**Invariant tests** assert the identities the engine must satisfy for any portfolio: contributions
+sum to the measured return, value change equals net flow plus the performance-driven part, weights
+sum to 100%, relative return is the difference of the two returns, and stale data is never
+presented as current. Identities that do *not* hold — the arithmetic sum of contributions is not
+the compounded return — are tested too, to confirm the difference is reported rather than hidden.
+
+## Performance and analytics
+
+Formulas, risk definitions and the benchmark's proxy status: [docs/performance.md](docs/performance.md).
+The ledger model and the time-weighted return methodology: [docs/transactions.md](docs/transactions.md).
+
+- **Two bases, always labelled.** With a transaction ledger the series is what the portfolio was actually worth and the return is **time-weighted** (`TRANSACTIONS`). Without one it values today's holdings at past closes — a reconstruction, labelled *Reconstructed* (`CURRENT_HOLDINGS`).
+- **Time-weighted return.** Each day's external cash flow is removed before the return is measured: `R_t = (V_t − CF_t) ÷ V_(t−1) − 1`, chained across the window. Adding money is not performance. Volatility and drawdown read a growth index built from those returns, so a withdrawal is never mistaken for a loss.
+- **Money-weighted return, beside it.** XIRR on the investor's own cash flows — actual/365, `Decimal`, bisection — reported as both a period figure and an annualised rate. TWR measures the portfolio, MWR measures the money; the application reports both and ranks neither. Where several rates fit the cash flows, no figure is published.
+- **Ledger and holdings are reconciled, not merged.** If the two disagree the response names each difference; neither is overwritten.
+- **Gaps are reported, never filled.** A session counts only when every security held that day has a close. Nothing is interpolated, substituted with ₹0 or carried forward, and returns are never linked across a gap. Staleness is reported separately from missing data.
+- **The benchmark is a proxy and says so.** The provider exposes no index endpoint, so NIFTY 50 is tracked through the SETFNIF50 ETF, labelled `ETF_PROXY` with its limitations stated. Nothing is estimated: an unsynced benchmark returns `no_data`.
+- **Measures state their own requirements.** Beta, tracking error and information ratio need 20 paired sessions; Sharpe needs `RISK_FREE_RATE_PCT`, unset by default. Each is withheld with its reason rather than estimated.
+- **Sector allocation is unavailable** — the security master has no sector data, and guessing one would be fabrication.
+- **Suspected corporate actions are flagged, not corrected.** A split arrives as a large fall and would silently invalidate returns, contributions and cost basis; the window is scanned for moves over 35%, or over 20% when they land on a ratio a corporate action would produce. Adjusting would need a corporate-action feed this application does not have.
+- **Profit uses a FIFO cost basis**, the basis Indian income-tax law applies to listed equity shares. Buy fees join the cost of the lot they bought and are allocated pro rata on a partial sale; sale fees reduce proceeds. Without a ledger, realised profit is reported unavailable rather than as zero.
+- **The money-weighted return is withheld, not guessed, when it is ambiguous.** A cash-flow series with several sign changes can satisfy the XIRR equation at several rates; the response says so instead of picking one. Annualisation is withheld below a 90-day window.
+- **Contributions and withdrawals are shown apart from performance**, so money paid in never reads as a gain.
+- **The intelligence layer gives no advice and makes no forecast.** It reports measurements and the limits on them; it does not rate, score or recommend securities.
+
 ## Production hardening
 
 | Protection | Implementation |
@@ -194,10 +272,22 @@ All application endpoints are under `/api/v1`. In production only the reads are 
 | `GET` | `/api/v1/portfolios` | List portfolios with holding count and invested capital | `200` | `503` |
 | `GET` | `/api/v1/portfolios/{portfolio_id}` | One portfolio with its holdings | `200` | `404`, `422` |
 | `GET` | `/api/v1/portfolios/{portfolio_id}/valuation` | Value a portfolio at stored NSE end-of-day prices (never calls the provider) | `200` | `404`, `422`, `503` |
+| `GET` | `/api/v1/portfolios/{portfolio_id}/performance` | Historical value series, returns, risk and benchmark comparison from stored closes (never calls the provider) | `200` | `404`, `422`, `503` |
+| `GET` | `/api/v1/portfolios/{portfolio_id}/allocation` | Position weights and concentration at the latest stored closes | `200` | `404`, `422`, `503` |
+| `GET` | `/api/v1/portfolios/{portfolio_id}/transactions` | The portfolio's transaction ledger, oldest first | `200` | `404`, `422`, `503` |
+| `GET` | `/api/v1/portfolios/{portfolio_id}/pnl` | Realised and unrealised profit on a FIFO cost basis, with contributions and withdrawals | `200` | `404`, `422`, `503` |
+| `GET` | `/api/v1/portfolios/{portfolio_id}/timeline` | Recorded transactions with the position change and value each produced | `200` | `404`, `422`, `503` |
+| `GET` | `/api/v1/portfolios/{portfolio_id}/attribution` | Per-security contributions to the window's return | `200` | `404`, `422`, `503` |
+| `GET` | `/api/v1/portfolios/{portfolio_id}/intelligence` | Deterministic explanation of the measured numbers, with the limitations that qualify them | `200` | `404`, `422`, `503` |
+| `GET` | `/api/v1/benchmarks` | Benchmarks that can be requested for comparison, with their proxy status | `200` | |
 | `GET` | `/api/v1/market-data/status` | Provider, configuration flag, request usage, last syncs, latest trade date, held-security freshness. Never returns credentials | `200` | `503` |
 | `POST` | `/api/v1/portfolios` | Create a portfolio, optionally with holdings | `201` | `403` in production, `422`, `503` |
 | `POST` | `/api/v1/portfolios/{portfolio_id}/holdings` | Add one holding | `201` | `403` in production, `404`, `409`, `422` |
 | `DELETE` | `/api/v1/portfolios/{portfolio_id}/holdings/{holding_id}` | Delete one holding | `204` | `403` in production, `404` |
+| `POST` | `/api/v1/portfolios/{portfolio_id}/transactions` | Append transactions, rejecting future dates and oversells | `201` | `403` in production, `404`, `422` |
+| `DELETE` | `/api/v1/portfolios/{portfolio_id}/transactions/{transaction_id}` | Delete one transaction, refusing if the rest would be oversold | `204` | `403` in production, `404`, `422` |
+| `POST` | `/api/v1/portfolios/{portfolio_id}/transactions/csv-preview` | Validate a transactions CSV against this ledger; saves nothing | `200` | `403` in production, `404`, `413`, `415` |
+| `POST` | `/api/v1/portfolios/{portfolio_id}/transactions/csv-import` | Import a transactions CSV atomically | `201` | `403` in production, `404`, `413`, `415`, `422` |
 | `POST` | `/api/v1/portfolios/csv-preview` | Validate a CSV file (multipart `file`); saves nothing | `200` | `403` in production, `413`, `415` |
 | `POST` | `/api/v1/portfolios/csv-import` | Create a portfolio from a CSV file (multipart `name`, `file`) | `201` | `403` in production, `413`, `415`, `422` |
 
@@ -376,12 +466,12 @@ Latest verified run on this commit:
 
 | Check | Result |
 |---|---|
-| Backend with PostgreSQL | 360 passed |
-| Backend without a database | 253 passed, 107 skipped |
-| Frontend unit tests | 8 passed |
+| Backend with PostgreSQL | 619 passed |
+| Backend without a database | 367 passed, 252 skipped |
+| Frontend unit tests | 44 passed |
 | ESLint, TypeScript, production build | Clean |
 
-Database tests rebuild the schema with the real migrations and assert that migrations match the ORM models. They cover portfolio creation and retrieval, holdings, deletion, validation, duplicate handling, CSV import without partial writes, market-data sync (idempotency, budget, rate limits, failures, locking, session and holiday rules), valuation arithmetic and the read-only production configuration.
+Database tests rebuild the schema with the real migrations and assert that migrations match the ORM models. They cover portfolio creation and retrieval, holdings, deletion, validation, duplicate handling, CSV import without partial writes, market-data sync (idempotency, budget, rate limits, failures, locking, session and holiday rules), valuation arithmetic, performance and coverage arithmetic, the transaction ledger and time-weighted return, transaction CSV validation and atomic import, FIFO cost basis and P&L, the timeline and attribution, the deterministic explanation layer with its golden and invariant suites, allocation and risk measures, and the read-only production configuration.
 
 Automated tests **never call the real Indian API**: parsing uses recorded fixtures in `backend/tests/fixtures/indian_api/`, HTTP behaviour uses a mocked transport, and sync tests use a fake provider.
 
@@ -390,7 +480,7 @@ Automated tests **never call the real Indian API**: parsing uses recorded fixtur
 Deliberately **not** implemented:
 
 - AI or automated investment recommendations, stock picking, or portfolio optimization
-- Advanced risk analytics, benchmarks and performance attribution
+- Money-weighted return (IRR), the Sortino ratio, and benchmark attribution by allocation and selection
 - Real-time or intraday prices
 - Realized P&L, taxes and dividends, or total-return measurement
 - Automated corporate-action adjustment (large moves are flagged, not corrected)
@@ -401,7 +491,10 @@ Operational limitations:
 
 - The public deployment is read-only; visitors cannot create or import portfolios.
 - Free-tier provider: roughly 20 held NSE securities can be kept current each month within the request budget, and the provider publishes no SLA.
-- The NSE trading calendar is maintained by hand in `backend/app/market_data/nse_calendar.py`; each year's list must be added.
+- The NSE trading calendar is maintained by hand in `backend/app/market_data/nse_calendar.py`; each year's list must be added. It is known complete from 15 September 2025 to 31 December 2026, and says so when a window reaches outside that range — NSE publishes only the current year, so no 2025 archive or 2027 list was available.
+- The benchmark is an **ETF proxy**, not the NIFTY 50 index: it carries an expense ratio and can trade away from net asset value.
+- Transactions can be added and removed but not edited in place; remove and re-add instead.
+- Tax reporting is not implemented: realised profit is computed FIFO, but holding-period rules and set-off are a separate problem.
 - Provider prices were spot-checked against NSE's official closes for five large-cap securities on 15 September 2026 and matched to the paisa. That is a small sample, not continuous assurance.
 - ISIN is not populated; holdings cannot be edited in place; portfolios cannot be renamed or deleted from the interface.
 
@@ -413,7 +506,13 @@ Operational limitations:
 | 2. Portfolio input and data model | Manual entry, CSV import, validation, PostgreSQL storage, portfolio display | Done |
 | 3A. Market data and valuation | Security master, NSE end-of-day prices, budget-protected sync, valuation API and UI | Done |
 | 3P. Production deployment | API and database in production, scheduled sync, read-only public access, hardening, rate limiting in log mode | Done |
-| 4. Analytics | Allocation, concentration, risk and performance | Planned |
+| 4.1. Performance history | Historical value series, cumulative return, volatility, maximum drawdown, coverage reporting | Done locally, not deployed |
+| 4.2. Transaction-aware analytics | Transaction ledger, time-weighted return, benchmark proxy, risk measures, allocation and concentration | Done locally, not deployed |
+| 4.3. Transaction intelligence | Entry and CSV import workflows, reconciliation, FIFO P&L, timeline, return attribution | Done locally, not deployed |
+| 5. Deterministic portfolio intelligence | Composed explanation of return drivers, benchmark comparison, cash-flow context, risk context and data quality | Done locally, not deployed |
+| 5.1. Intelligence engine hardening | Shared calculation context, one valuation pass per request, golden and invariant test suites, explanation trace | Done locally, not deployed |
+| 6.1. Money-weighted return | XIRR beside the time-weighted return, with ambiguous and short-window cases withheld rather than estimated | Done locally, not deployed |
+| 6.2. Corporate-action disclosure | The whole price window scanned for moves that may be corporate actions, with the affected figures named and none adjusted | Done locally, not deployed |
 
 "Production" here means deployed on production infrastructure as a read-only demonstration. It is not a regulated or commercially assured financial service.
 

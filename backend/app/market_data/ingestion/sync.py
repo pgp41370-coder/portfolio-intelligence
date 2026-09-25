@@ -46,6 +46,7 @@ from app.market_data.exceptions import (
 from app.market_data.models import Listing, MarketDataSyncRun
 from app.market_data.providers.base import MarketDataProvider
 from app.market_data.records import DailyPriceSeries, HistoricalPeriod
+from app.performance.benchmarks import available_benchmarks
 from app.portfolios.rules import Exchange
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,9 @@ class PriceSyncPlan:
     unmatched_nse_symbols: list[str]
     unmatched_bse_codes: list[str]
     bse_without_nse_listing: list[str]
+    # A registered benchmark missing from the security master is reported here, not as an
+    # unmatched holding: nobody holds it, the application prices it for comparison.
+    unmatched_benchmark_symbols: list[str] = field(default_factory=list)
 
     def as_details(self) -> dict[str, Any]:
         return {
@@ -90,6 +94,7 @@ class PriceSyncPlan:
             "up_to_date": self.up_to_date,
             "already_requested_this_session": self.already_requested_this_session,
             "unmatched_nse_symbols": self.unmatched_nse_symbols,
+            "unmatched_benchmark_symbols": self.unmatched_benchmark_symbols,
             "unmatched_bse_codes": self.unmatched_bse_codes,
             "bse_without_nse_listing": self.bse_without_nse_listing,
         }
@@ -239,11 +244,25 @@ def plan_price_sync(
     now: datetime,
     portfolio_id: uuid.UUID | None = None,
     force: bool = False,
+    only_symbols: set[str] | None = None,
 ) -> PriceSyncPlan:
-    """Decide which held NSE securities need a request, without calling the provider."""
+    """Decide which held NSE securities need a request, without calling the provider.
+
+    Registered benchmark securities are included: a comparison is only honest if the
+    benchmark's closes are as current as the portfolio's, and each costs the same single
+    request per sync as any held security.
+    """
     expected = latest_expected_session(now, settings.trading_calendar)
     keys = repository.held_security_keys(session, portfolio_id)
     nse_symbols = {code for exchange, code in keys if exchange is Exchange.NSE}
+    benchmark_symbols = {item.nse_symbol for item in available_benchmarks() if item.exchange is Exchange.NSE}
+    nse_symbols |= benchmark_symbols
+    if only_symbols is not None:
+        # An operator restricting the run to named securities, to spend as few metered
+        # requests as possible.
+        nse_symbols &= only_symbols
+        benchmark_symbols &= only_symbols
+        bse_codes = {code for exchange, code in keys if exchange is Exchange.BSE} & only_symbols
     bse_codes = {code for exchange, code in keys if exchange is Exchange.BSE}
     by_nse, by_bse = repository.listings_by_codes(session, provider, nse_symbols, bse_codes)
 
@@ -283,7 +302,8 @@ def plan_price_sync(
         requests=requests,
         up_to_date=up_to_date,
         already_requested_this_session=already_requested,
-        unmatched_nse_symbols=sorted(nse_symbols - by_nse.keys()),
+        unmatched_nse_symbols=sorted(nse_symbols - by_nse.keys() - benchmark_symbols),
+        unmatched_benchmark_symbols=sorted(benchmark_symbols - by_nse.keys()),
         unmatched_bse_codes=unmatched_bse,
         bse_without_nse_listing=bse_only,
     )
@@ -299,11 +319,15 @@ def sync_daily_prices(
     portfolio_id: uuid.UUID | None = None,
     force: bool = False,
     dry_run: bool = False,
+    only_symbols: set[str] | None = None,
 ) -> SyncOutcome:
     now = clock()
     if dry_run:
         with session_factory() as session:
-            plan = plan_price_sync(session, provider.name, settings, now=now, portfolio_id=portfolio_id, force=force)
+            plan = plan_price_sync(
+                session, provider.name, settings, now=now, portfolio_id=portfolio_id,
+                force=force, only_symbols=only_symbols,
+            )
         return SyncOutcome(run_id=None, kind=KIND_DAILY_PRICES, status="dry_run", details=plan.as_details())
 
     with sync_lock(engine), session_factory() as session:
@@ -317,7 +341,10 @@ def sync_daily_prices(
                     status="failed",
                     error="The security master has not been loaded. Run 'sync-listings' first.",
                 )
-            plan = plan_price_sync(session, provider.name, settings, now=now, portfolio_id=portfolio_id, force=force)
+            plan = plan_price_sync(
+                session, provider.name, settings, now=now, portfolio_id=portfolio_id,
+                force=force, only_symbols=only_symbols,
+            )
             if not plan.requests:
                 return _finish_run(
                     session,

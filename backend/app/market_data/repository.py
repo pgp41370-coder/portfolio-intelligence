@@ -220,6 +220,30 @@ def upsert_daily_prices(
     return UpsertCounts(inserted=inserted, updated=len(flags) - inserted, unchanged=len(rows) - len(flags))
 
 
+def price_series(
+    session: Session,
+    listing_ids: Collection[uuid.UUID],
+    exchange: Exchange,
+    *,
+    start: date | None = None,
+    end: date | None = None,
+) -> dict[uuid.UUID, list[DailyPrice]]:
+    """Every stored close per listing within an inclusive date range, oldest first."""
+    if not listing_ids:
+        return {}
+    statement = select(DailyPrice).where(
+        DailyPrice.listing_id.in_(list(listing_ids)), DailyPrice.exchange == exchange.value
+    )
+    if start is not None:
+        statement = statement.where(DailyPrice.trade_date >= start)
+    if end is not None:
+        statement = statement.where(DailyPrice.trade_date <= end)
+    series: dict[uuid.UUID, list[DailyPrice]] = {}
+    for row in session.scalars(statement.order_by(DailyPrice.listing_id, DailyPrice.trade_date)):
+        series.setdefault(row.listing_id, []).append(row)
+    return series
+
+
 def count_listings_with_prices(session: Session, provider: str, exchange: Exchange) -> int:
     statement = (
         select(func.count(distinct(DailyPrice.listing_id)))

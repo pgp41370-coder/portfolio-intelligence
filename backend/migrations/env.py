@@ -10,6 +10,7 @@ from app.db.base import Base
 from app.db.database import normalize_database_url
 from app.market_data import models as market_data_models  # noqa: F401  (registers tables on Base.metadata)
 from app.portfolios import models  # noqa: F401  (registers tables on Base.metadata)
+from app.transactions import models as transaction_models  # noqa: F401  (registers tables on Base.metadata)
 
 config = context.config
 

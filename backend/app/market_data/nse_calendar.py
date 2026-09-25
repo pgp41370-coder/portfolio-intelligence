@@ -1,21 +1,41 @@
 """Default NSE equity-segment trading calendar, used by the price-freshness rules.
 
-Sources (checked 15 Sep 2026):
+Sources:
 
-* NSE, "Holidays for the calendar year 2026 - Equities":
-  https://www.nseindia.com/resources/exchange-communication-holidays
+* NSE, "Holidays for the calendar year 2026 - Equities" (re-checked 24 Sep 2026, and it still
+  matches every 2026 entry below): https://www.nseindia.com/resources/exchange-communication-holidays
 * NSE circular CMTR72349, "Live Trading Session on February 01, 2026":
   https://nsearchives.nseindia.com/content/circulars/CMTR72349.pdf
+* The 2025 entries are corroborated by the provider's own price history: across the five NSE
+  securities synced into the development database, no security has a close on any of them,
+  while every other weekday in 15 Sep 2025 - 15 Sep 2026 has one.
 
-Only data lives here. When NSE publishes a new year's list, add its dates below (or set
-``NSE_TRADING_HOLIDAYS`` / ``NSE_SPECIAL_TRADING_SESSIONS``); the freshness logic in
-``calendar.py`` does not change.
+NSE's holiday page publishes the current calendar year only. It offered no 2025 archive and no
+2027 list when this was written, which is why ``CALENDAR_COMPLETE_FROM`` / ``_TO`` exist: the
+application states the range its calendar is known to be complete for instead of assuming that
+every weekday outside that range is a trading session.
+
+Only data lives here. When NSE publishes a new year's list, add its dates below and extend the
+completeness range (or set ``NSE_TRADING_HOLIDAYS`` / ``NSE_SPECIAL_TRADING_SESSIONS``); the
+logic in ``calendar.py`` does not change.
 """
 
 from datetime import date
 
+# The window over which the lists below are known to be complete. Before 15 Sep 2025 there is
+# neither a published list nor price evidence, so holidays there may be missing; after
+# 31 Dec 2026 NSE has not published a list at all.
+CALENDAR_COMPLETE_FROM = date(2025, 9, 15)
+CALENDAR_COMPLETE_TO = date(2026, 12, 31)
+
 # Weekday trading holidays. Holidays that fall on a Saturday or Sunday need no entry.
 NSE_TRADING_HOLIDAYS: dict[date, str] = {
+    # 2025 (see the sourcing note above).
+    date(2025, 10, 2): "Mahatma Gandhi Jayanti / Dussehra",
+    date(2025, 10, 22): "Diwali-Balipratipada",
+    date(2025, 11, 5): "Prakash Gurpurb Sri Guru Nanak Dev",
+    date(2025, 12, 25): "Christmas",
+    # 2026.
     date(2026, 1, 15): "Municipal Corporation Election - Maharashtra",
     date(2026, 1, 26): "Republic Day",
     date(2026, 3, 3): "Holi",

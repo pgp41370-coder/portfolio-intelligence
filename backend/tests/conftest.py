@@ -10,11 +10,17 @@ from sqlalchemy import Engine, create_engine, make_url, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
+from app.db.base import Base
 from app.db.database import normalize_database_url
 from app.main import create_app
+from app.market_data import models as _market_data_models  # noqa: F401  (registers tables)
+from app.portfolios import models as _portfolio_models  # noqa: F401  (registers tables)
+from app.transactions import models as _transaction_models  # noqa: F401  (registers tables)
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-ALL_TABLES = ("daily_prices", "market_data_sync_runs", "listings", "holdings", "portfolios")
+# Derived from the models, so a new table is truncated between tests without editing this list.
+# Reverse dependency order keeps the TRUNCATE valid for foreign keys.
+ALL_TABLES = tuple(table.name for table in reversed(Base.metadata.sorted_tables))
 
 
 @pytest.fixture

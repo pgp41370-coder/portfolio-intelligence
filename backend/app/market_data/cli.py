@@ -44,6 +44,12 @@ def main(argv: list[str] | None = None) -> int:
     prices.add_argument("--portfolio-id", type=uuid.UUID, help="Only securities held in this portfolio.")
     prices.add_argument("--dry-run", action="store_true", help="Show what would be requested without calling the provider.")
     prices.add_argument("--force", action="store_true", help="Request even securities that look up to date.")
+    prices.add_argument(
+        "--only",
+        action="append",
+        metavar="SYMBOL",
+        help="Restrict the run to these NSE symbols, to spend as few metered requests as possible.",
+    )
     commands.add_parser("status", help="Show market-data status.")
     args = parser.parse_args(argv)
 
@@ -94,6 +100,7 @@ def _run(args: argparse.Namespace, settings: Settings) -> int:
                 portfolio_id=args.portfolio_id,
                 force=args.force,
                 dry_run=args.dry_run,
+                only_symbols={symbol.strip().upper() for symbol in args.only} if args.only else None,
             )
     except SyncAlreadyRunningError as exc:
         print(str(exc), file=sys.stderr)

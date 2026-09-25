@@ -5,6 +5,12 @@ import { useEffect, useState } from "react";
 import { HoldingsTable } from "@/components/portfolio/holdings-table";
 import { InvestedCapitalCard } from "@/components/portfolio/invested-capital-card";
 import { PageHeader } from "@/components/portfolio/page-header";
+import { PortfolioAllocation } from "@/components/portfolio/portfolio-allocation";
+import { PortfolioIntelligenceCard } from "@/components/portfolio/portfolio-intelligence";
+import { PortfolioPnlCard } from "@/components/portfolio/portfolio-pnl";
+import { PortfolioTimelineCard } from "@/components/portfolio/portfolio-timeline";
+import { PortfolioTransactions } from "@/components/portfolio/portfolio-transactions";
+import { PortfolioPerformance } from "@/components/portfolio/portfolio-performance";
 import { PortfolioValuation } from "@/components/portfolio/portfolio-valuation";
 import { ServiceUnavailable } from "@/components/portfolio/service-unavailable";
 import { Alert } from "@/components/ui/alert";
@@ -137,14 +143,32 @@ export function PortfolioView({ portfolioId, justCreated }: PortfolioViewProps) 
 
       {showSaved && (
         <Alert tone="success" title="Portfolio saved">
-          Your holdings are stored. Analytics such as allocation, concentration and risk will be
-          added in a later release.
+          Your holdings are stored. Add transactions below to switch this portfolio&rsquo;s history
+          from a reconstruction to a record of what was actually held.
         </Alert>
       )}
 
       <DataLegend />
 
       <PortfolioValuation portfolioId={portfolioId} refreshToken={valuationRefresh} />
+
+      <PortfolioPerformance portfolioId={portfolioId} refreshToken={valuationRefresh} />
+
+      {/* Explains the card above it, so it reads in that order. */}
+      <PortfolioIntelligenceCard portfolioId={portfolioId} refreshToken={valuationRefresh} />
+
+      <PortfolioAllocation portfolioId={portfolioId} refreshToken={valuationRefresh} />
+
+      <PortfolioPnlCard portfolioId={portfolioId} refreshToken={valuationRefresh} />
+
+      {/* The ledger drives every analytics card above, so a change here reloads them all. */}
+      <PortfolioTransactions
+        portfolioId={portfolioId}
+        holdings={portfolio.holdings}
+        onLedgerChanged={() => setValuationRefresh((value) => value + 1)}
+      />
+
+      <PortfolioTimelineCard portfolioId={portfolioId} refreshToken={valuationRefresh} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
         <section className={`${cardStyles} min-w-0`}>

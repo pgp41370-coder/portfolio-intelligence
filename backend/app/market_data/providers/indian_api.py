@@ -53,6 +53,8 @@ MAX_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = (2.0, 4.0)
 MAX_HISTORY_BYTES = 2 * 1024 * 1024
 MAX_SECURITY_MASTER_BYTES = 8 * 1024 * 1024
+DIAGNOSTIC_SNIPPET_LIMIT = 200
+DIAGNOSTIC_MAX_KEYS = 12
 MIN_SECURITY_MASTER_ROWS = 100
 MAX_CLOSE_PRICE = Decimal("99999999999999.9999")  # NUMERIC(18, 4)
 MAX_VOLUME = 9_223_372_036_854_775_807  # BIGINT
@@ -136,7 +138,7 @@ class IndianApiProvider:
         self.close()
 
     def get_security_master(self) -> SecurityMasterSnapshot:
-        payload = self._request_json(
+        payload, _ = self._request_json(
             self._security_master_url,
             params=None,
             metered=False,
@@ -154,14 +156,17 @@ class IndianApiProvider:
         if len(symbol) > MAX_SYMBOL_LENGTH or not SYMBOL_PATTERN.fullmatch(symbol):
             raise ProviderRequestError(f"{nse_symbol!r} is not a valid NSE symbol.")
         context = f"historical prices for {symbol}"
-        payload = self._request_json(
+        payload, meta = self._request_json(
             f"{self._base_url}/historical_data",
             params={"stock_name": symbol, "period": period, "filter": "price"},
             metered=True,
             max_bytes=MAX_HISTORY_BYTES,
             context=context,
         )
-        return parse_historical_prices(payload, symbol=symbol, today=self._today(), context=context)
+        try:
+            return parse_historical_prices(payload, symbol=symbol, today=self._today(), context=context, meta=meta)
+        except MarketDataError as exc:  # the key must never survive into a diagnostic
+            raise self._redacted(exc) from None
 
     # --- HTTP ------------------------------------------------------------------------
 
@@ -173,7 +178,7 @@ class IndianApiProvider:
         metered: bool,
         max_bytes: int,
         context: str,
-    ) -> Any:
+    ) -> tuple[Any, str]:
         headers = {"X-Api-Key": self._api_key} if metered and self._api_key else {}
         last_error: MarketDataError | None = None
         for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -183,14 +188,17 @@ class IndianApiProvider:
             if metered:
                 self.metered_requests += 1
             try:
-                status, body = self._send(url, params=params, headers=headers, max_bytes=max_bytes, context=context)
+                status, body, content_type = self._send(
+                    url, params=params, headers=headers, max_bytes=max_bytes, context=context
+                )
             except httpx.TimeoutException:
                 last_error = ProviderUnavailableError(f"{context}: the request timed out.")
             except httpx.TransportError as exc:
                 last_error = ProviderUnavailableError(f"{context}: network error ({type(exc).__name__}).")
             else:
                 if status == 200:
-                    return _decode_json(body, context)
+                    meta = response_meta(status, content_type, len(body))
+                    return _decode_json(body, context, meta), meta
                 error = _error_for_status(status, body, context)
                 if not isinstance(error, ProviderUnavailableError):
                     raise self._redacted(error)
@@ -216,7 +224,7 @@ class IndianApiProvider:
         headers: dict[str, str],
         max_bytes: int,
         context: str,
-    ) -> tuple[int, bytes]:
+    ) -> tuple[int, bytes, str | None]:
         with self._client.stream("GET", url, params=params, headers=headers) as response:
             declared = response.headers.get("content-length", "")
             if declared.isdigit() and int(declared) > max_bytes:
@@ -226,7 +234,7 @@ class IndianApiProvider:
                 received.extend(chunk)
                 if len(received) > max_bytes:
                     raise ProviderResponseError(f"{context}: response is larger than {max_bytes} bytes.")
-            return response.status_code, bytes(received)
+            return response.status_code, bytes(received), response.headers.get("content-type")
 
     def _wait_for_rate_limit(self) -> None:
         now = self._clock()
@@ -244,11 +252,12 @@ class IndianApiProvider:
         return type(error)(self._redact(str(error)))
 
 
-def _decode_json(body: bytes, context: str) -> Any:
+def _decode_json(body: bytes, context: str, meta: str | None = None) -> Any:
     try:
         return json.loads(body, parse_float=Decimal)
     except (ValueError, UnicodeDecodeError):
-        raise ProviderResponseError(f"{context}: response was not valid JSON.") from None
+        detail = f" ({meta}; snippet={_bounded(body.decode('utf-8', errors='replace'), DIAGNOSTIC_SNIPPET_LIMIT)})" if meta else ""
+        raise ProviderResponseError(f"{context}: response was not valid JSON.{detail}") from None
 
 
 def _snippet(body: bytes, limit: int = 120) -> str:
@@ -256,6 +265,57 @@ def _snippet(body: bytes, limit: int = 120) -> str:
     text = "".join(character for character in text if character.isprintable() or character.isspace())
     text = re.sub(r"\s+", " ", text).strip()
     return text[:limit] or "empty body"
+
+
+# Diagnostics may reach public CI logs and the sync-run record, so anything that looks like a
+# credential is removed before a snippet is kept, and the snippet itself is bounded.
+_SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r'(?i)("?(?:api[_-]?key|authorization|auth|token|password|passwd|secret|access[_-]?key)"?\s*[:=]\s*"?)[^",}\s]+'), r"\1[redacted]"),
+    (re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._\-]+"), r"\1 [redacted]"),
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*)://[^\s:/@]+:[^\s@]+@"), r"\1://[redacted]@"),
+    (re.compile(r"\b[A-Za-z0-9_\-]{32,}\b"), "[redacted]"),
+)
+
+
+def scrub_secrets(text: str) -> str:
+    """Remove credential-shaped substrings from text that may be logged or stored."""
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def _bounded(text: str, limit: int) -> str:
+    text = "".join(character for character in text if character.isprintable() or character.isspace())
+    text = scrub_secrets(re.sub(r"\s+", " ", text).strip())
+    return text[:limit] + "…" if len(text) > limit else text
+
+
+def describe_payload(payload: Any, *, meta: str | None = None, limit: int = DIAGNOSTIC_SNIPPET_LIMIT) -> str:
+    """Structure-first, secret-free description of an unexpected response.
+
+    Reports the transport facts and the shape before any content, and includes a bounded,
+    scrubbed snippet only because the shape alone rarely identifies which response it was.
+    """
+    parts = [meta] if meta else []
+    parts.append(f"top-level {type(payload).__name__}")
+    if isinstance(payload, dict):
+        keys = list(payload)[:DIAGNOSTIC_MAX_KEYS]
+        parts.append("keys=" + ", ".join(repr(str(key)) for key in keys) + ("…" if len(payload) > DIAGNOSTIC_MAX_KEYS else ""))
+    elif isinstance(payload, list):
+        parts.append(f"{len(payload)} items")
+    try:
+        rendered = json.dumps(payload, default=str)
+    except (TypeError, ValueError):
+        rendered = str(payload)
+    snippet = _bounded(rendered, limit)
+    if snippet:
+        parts.append(f"snippet={snippet}")
+    return "; ".join(part for part in parts if part)
+
+
+def response_meta(status: int, content_type: str | None, byte_length: int) -> str:
+    kind = (content_type or "unknown").split(";")[0].strip() or "unknown"
+    return f"HTTP {status}; content-type={kind}; {byte_length} bytes"
 
 
 def _error_for_status(status: int, body: bytes, context: str) -> MarketDataError:
@@ -382,6 +442,7 @@ def parse_historical_prices(
     symbol: str,
     today: date,
     context: str | None = None,
+    meta: str | None = None,
 ) -> DailyPriceSeries:
     """Validate a ``/historical_data?filter=price`` response and return dated NSE closes.
 
@@ -392,7 +453,9 @@ def parse_historical_prices(
     """
     context = context or f"historical prices for {symbol}"
     if not isinstance(payload, dict) or not isinstance(payload.get("datasets"), list):
-        raise ProviderResponseError(f"{context}: expected an object with a 'datasets' list.")
+        raise ProviderResponseError(
+            f"{context}: expected an object with a 'datasets' list. Received: {describe_payload(payload, meta=meta)}"
+        )
     datasets = payload["datasets"]
 
     price_sets = [dataset for dataset in datasets if _metric(dataset) == "price"]
